@@ -1,10 +1,30 @@
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Record;
 import org.neo4j.driver.Session;
 import org.neo4j.driver.SessionConfig;
+import org.neo4j.driver.Value;
+
+import java.util.List;
 
 public class Main {
+    private static final String STMT_QUERY = """
+            MATCH (:FunctionDeclaration)-[:BODY]->(:Block)-[:STATEMENTS]->(s)
+            WHERE any(label IN labels(s) WHERE label IN [
+              'AssignExpression',
+              'UnaryOperator',
+              'DeclarationStatement'
+            ])
+            RETURN
+              elementId(s) AS nodeId,
+              labels(s) AS nodeLabels,
+              s.code AS code,
+              s.startLine AS startLine,
+              s.endLine AS endLine
+            ORDER BY startLine, nodeId
+            """;
+
     public static void main(String[] args) {
         String uri = "bolt://localhost:7687";
         String user = "neo4j";
@@ -12,12 +32,29 @@ public class Main {
 
         try (Driver driver = GraphDatabase.driver(uri, AuthTokens.basic(user, password));
              Session session = driver.session(SessionConfig.forDatabase("neo4j"))) {
+            List<Record> statements = session.executeRead(tx -> tx.run(STMT_QUERY).list());
 
-            long count = session.executeRead(tx ->
-                    tx.run("MATCH (n) RETURN count(n) AS c").single().get("c").asLong()
-            );
+            System.out.println("Found stmt nodes: " + statements.size());
+            for (Record statement : statements) {
+                String nodeId = statement.get("nodeId").asString();
+                List<String> nodeLabels = statement.get("nodeLabels").asList(Value::asString);
+                String code = statement.get("code").isNull() ? "<no code>" : statement.get("code").asString();
+                String startLine = statement.get("startLine").isNull()
+                        ? "?"
+                        : String.valueOf(statement.get("startLine").asInt());
+                String endLine = statement.get("endLine").isNull()
+                        ? "?"
+                        : String.valueOf(statement.get("endLine").asInt());
 
-            System.out.println("Connected. Node count = " + count);
+                System.out.printf(
+                        "nodeId=%s, labels=%s, lines=%s-%s, code=%s%n",
+                        nodeId,
+                        nodeLabels,
+                        startLine,
+                        endLine,
+                        code
+                );
+            }
         }
     }
 }
