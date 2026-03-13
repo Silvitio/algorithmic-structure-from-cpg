@@ -14,15 +14,14 @@ public class Main {
             WHERE any(label IN labels(s) WHERE label IN [
               'AssignExpression',
               'UnaryOperator',
-              'DeclarationStatement'
+              'DeclarationStatement',
+              'ReturnStatement'
             ])
             RETURN
               elementId(s) AS nodeId,
               labels(s) AS nodeLabels,
-              s.code AS code,
-              s.startLine AS startLine,
-              s.endLine AS endLine
-            ORDER BY startLine, nodeId
+              s.code AS code
+            ORDER BY nodeId
             """;
 
     public static void main(String[] args) {
@@ -39,19 +38,19 @@ public class Main {
                 String nodeId = statement.get("nodeId").asString();
                 List<String> nodeLabels = statement.get("nodeLabels").asList(Value::asString);
                 String code = statement.get("code").isNull() ? "<no code>" : statement.get("code").asString();
-                String startLine = statement.get("startLine").isNull()
-                        ? "?"
-                        : String.valueOf(statement.get("startLine").asInt());
-                String endLine = statement.get("endLine").isNull()
-                        ? "?"
-                        : String.valueOf(statement.get("endLine").asInt());
 
                 System.out.printf(
-                        "nodeId=%s, labels=%s, lines=%s-%s, code=%s%n",
+                        """
+                        nodeId=%s
+                        labels=%s
+                        ------------------------------------------------------------
+                        %s
+                        ------------------------------------------------------------
+                        
+                        
+                        """,
                         nodeId,
                         nodeLabels,
-                        startLine,
-                        endLine,
                         code
                 );
             }
