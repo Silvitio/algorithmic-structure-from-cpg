@@ -98,7 +98,7 @@ public class Main {
         return valueDeclarations.stream()
                 .map(valueDeclaration -> new ActionNode(
                         valueDeclaration.get("nodeId").asString(),
-                        "VALUE_DECLARATION",
+                        ActionType.VALUE_DECLARATION,
                         valueDeclaration.get("code").isNull() ? "<no code>" : valueDeclaration.get("code").asString(),
                         statementIndex,
                         valueDeclaration.get("declarationIndex").isNull()
@@ -108,18 +108,18 @@ public class Main {
                 .toList();
     }
 
-    private static String detectActionType(List<String> nodeLabels) {
+    private static ActionType detectActionType(List<String> nodeLabels) {
         if (nodeLabels.contains("AssignExpression")) {
-            return "ASSIGNMENT";
+            return ActionType.ASSIGNMENT;
         }
         if (nodeLabels.contains("UnaryOperator")) {
-            return "UNARY_OPERATION";
+            return ActionType.UNARY_OPERATION;
         }
         if (nodeLabels.contains("ReturnStatement")) {
-            return "RETURN";
+            return ActionType.RETURN;
         }
 
-        return "UNKNOWN";
+        return ActionType.UNKNOWN;
     }
 
     private static void printSequence(SequenceNode sequence) {

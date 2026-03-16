@@ -2,12 +2,12 @@ import java.util.Objects;
 
 public final class ActionNode implements CodeNode {
     private final String cpgNodeId;
-    private final String actionType;
+    private final ActionType actionType;
     private final String code;
     private final int statementIndex;
     private final Integer declarationIndex;
 
-    public ActionNode(String cpgNodeId, String actionType, String code, int statementIndex, Integer declarationIndex) {
+    public ActionNode(String cpgNodeId, ActionType actionType, String code, int statementIndex, Integer declarationIndex) {
         this.cpgNodeId = Objects.requireNonNull(cpgNodeId);
         this.actionType = Objects.requireNonNull(actionType);
         this.code = Objects.requireNonNull(code);
@@ -19,7 +19,7 @@ public final class ActionNode implements CodeNode {
         return cpgNodeId;
     }
 
-    public String actionType() {
+    public ActionType actionType() {
         return actionType;
     }
 
