@@ -5,12 +5,14 @@ public final class ActionNode implements CodeNode {
     private final String actionType;
     private final String code;
     private final int statementIndex;
+    private final Integer declarationIndex;
 
-    public ActionNode(String cpgNodeId, String actionType, String code, int statementIndex) {
+    public ActionNode(String cpgNodeId, String actionType, String code, int statementIndex, Integer declarationIndex) {
         this.cpgNodeId = Objects.requireNonNull(cpgNodeId);
         this.actionType = Objects.requireNonNull(actionType);
         this.code = Objects.requireNonNull(code);
         this.statementIndex = statementIndex;
+        this.declarationIndex = declarationIndex;
     }
 
     public String cpgNodeId() {
@@ -29,6 +31,10 @@ public final class ActionNode implements CodeNode {
         return statementIndex;
     }
 
+    public Integer declarationIndex() {
+        return declarationIndex;
+    }
+
     @Override
     public String toString() {
         return "ActionNode{" +
@@ -36,6 +42,7 @@ public final class ActionNode implements CodeNode {
                 ", actionType='" + actionType + '\'' +
                 ", code='" + code + '\'' +
                 ", statementIndex=" + statementIndex +
+                ", declarationIndex=" + declarationIndex +
                 '}';
     }
 }
