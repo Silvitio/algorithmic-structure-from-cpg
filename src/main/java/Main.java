@@ -17,6 +17,7 @@ public class Main {
               'UnaryOperator',
               'DeclarationStatement',
               'ReturnStatement',
+              'IfStatement',
               'ForStatement',
               'WhileStatement',
               'DoStatement'
@@ -36,6 +37,7 @@ public class Main {
                 'UnaryOperator',
                 'DeclarationStatement',
                 'ReturnStatement',
+                'IfStatement',
                 'ForStatement',
                 'WhileStatement',
                 'DoStatement'
@@ -74,6 +76,21 @@ public class Main {
               elementId(iteration) AS iterationNodeId,
               labels(iteration) AS iterationLabels,
               iteration.code AS iterationCode
+            """;
+    private static final String IF_DETAILS_QUERY = """
+            MATCH (ifStmt)
+            WHERE elementId(ifStmt) = $ifNodeId
+            OPTIONAL MATCH (ifStmt)-[:CONDITION]->(condition)
+            OPTIONAL MATCH (ifStmt)-[:THEN_STATEMENT]->(thenNode)
+            OPTIONAL MATCH (ifStmt)-[:ELSE_STATEMENT]->(elseNode)
+            RETURN
+              condition.code AS conditionCode,
+              elementId(thenNode) AS thenNodeId,
+              labels(thenNode) AS thenNodeLabels,
+              thenNode.code AS thenNodeCode,
+              elementId(elseNode) AS elseNodeId,
+              labels(elseNode) AS elseNodeLabels,
+              elseNode.code AS elseNodeCode
             """;
 
     public static void main(String[] args) {
@@ -118,6 +135,9 @@ public class Main {
     ) {
         if (nodeLabels.contains("DeclarationStatement")) {
             return List.copyOf(extractValueDeclarations(session, nodeId, statementIndex));
+        }
+        if (nodeLabels.contains("IfStatement")) {
+            return List.of(buildIfNode(session, nodeId, code, statementIndex));
         }
         if (isLoopStatement(nodeLabels)) {
             return List.of(buildLoopNode(session, nodeId, nodeLabels, code, statementIndex));
@@ -198,6 +218,40 @@ public class Main {
         );
     }
 
+    private static IfNode buildIfNode(
+            Session session,
+            String nodeId,
+            String code,
+            int statementIndex
+    ) {
+        Record ifDetails = session.executeRead(tx -> tx.run(
+                IF_DETAILS_QUERY,
+                Map.of("ifNodeId", nodeId)
+        ).single());
+
+        SequenceNode thenBranch = buildBranchSequence(
+                session,
+                readNullableString(ifDetails, "thenNodeId"),
+                readLabels(ifDetails, "thenNodeLabels"),
+                readNullableString(ifDetails, "thenNodeCode")
+        );
+        CodeNode elseBranch = buildElseBranch(
+                session,
+                readNullableString(ifDetails, "elseNodeId"),
+                readLabels(ifDetails, "elseNodeLabels"),
+                readNullableString(ifDetails, "elseNodeCode")
+        );
+
+        return new IfNode(
+                nodeId,
+                code,
+                readNullableString(ifDetails, "conditionCode"),
+                statementIndex,
+                thenBranch == null ? new SequenceNode() : thenBranch,
+                elseBranch
+        );
+    }
+
     private static SequenceNode buildSingleStatementSequence(
             Session session,
             String nodeId,
@@ -213,6 +267,38 @@ public class Main {
             sequence.addChild(node);
         }
         return sequence;
+    }
+
+    private static SequenceNode buildBranchSequence(
+            Session session,
+            String nodeId,
+            List<String> nodeLabels,
+            String code
+    ) {
+        if (nodeId == null) {
+            return null;
+        }
+        if (nodeLabels.contains("Block")) {
+            return buildSequence(session, fetchBlockStatements(session, nodeId));
+        }
+
+        return buildSingleStatementSequence(session, nodeId, nodeLabels, code);
+    }
+
+    private static CodeNode buildElseBranch(
+            Session session,
+            String nodeId,
+            List<String> nodeLabels,
+            String code
+    ) {
+        if (nodeId == null) {
+            return null;
+        }
+        if (nodeLabels.contains("IfStatement")) {
+            return buildIfNode(session, nodeId, code, 0);
+        }
+
+        return buildBranchSequence(session, nodeId, nodeLabels, code);
     }
 
     private static List<Record> fetchBlockStatements(Session session, String blockNodeId) {
@@ -279,6 +365,11 @@ public class Main {
     }
 
     private static void printNode(CodeNode node, String indent) {
+        if (node instanceof SequenceNode sequenceNode) {
+            printOptionalSequence(sequenceNode, indent);
+            return;
+        }
+
         if (node instanceof ActionNode action) {
             String declarationLine = action.declarationIndex() == null
                     ? ""
@@ -337,6 +428,38 @@ public class Main {
             printSequence(loop.body(), indent + "  ");
             System.out.println(indent + "iteration:");
             printOptionalSequence(loop.iteration(), indent + "  ");
+            System.out.println();
+            return;
+        }
+
+        if (node instanceof IfNode ifNode) {
+            System.out.printf(
+                    """
+                    %sifNode
+                    %snodeId=%s
+                    %sstatementIndex=%d
+                    %scondition=%s
+                    %scode=%s
+                    %sthen:
+                    """,
+                    indent,
+                    indent,
+                    ifNode.cpgNodeId(),
+                    indent,
+                    ifNode.statementIndex(),
+                    indent,
+                    ifNode.conditionCode() == null ? "<no condition>" : ifNode.conditionCode(),
+                    indent,
+                    ifNode.code(),
+                    indent
+            );
+            printOptionalSequence(ifNode.thenBranch(), indent + "  ");
+            System.out.println(indent + "else:");
+            if (ifNode.elseBranch() == null) {
+                System.out.println(indent + "  <empty>");
+            } else {
+                printNode(ifNode.elseBranch(), indent + "  ");
+            }
             System.out.println();
         }
     }
