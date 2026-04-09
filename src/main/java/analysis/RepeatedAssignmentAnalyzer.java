@@ -108,7 +108,7 @@ public final class RepeatedAssignmentAnalyzer {
         ).list();
 
         Map<String, Integer> variableVersions = new HashMap<>();
-        Map<String, AssignmentSnapshot> lastAssignments = new HashMap<>();
+        Map<String, TrackedWrite> trackedWrites = new HashMap<>();
         int markedCount = 0;
 
         for (Record statementRecord : statementRecords) {
@@ -126,20 +126,26 @@ public final class RepeatedAssignmentAnalyzer {
 
             if (!candidates.isEmpty()) {
                 for (AssignmentCandidate candidate : candidates) {
-                    boolean redundant = isRedundant(candidate, lastAssignments, variableVersions);
+                    markVariablesAsUsed(trackedWrites, candidate.dependencies());
+
+                    boolean redundant = isRedundant(candidate, trackedWrites, variableVersions);
                     if (redundant) {
                         tx.run(MARK_DEAD_CODE_QUERY, Values.parameters("nodeId", candidate.sourceNodeId())).consume();
                         markedCount++;
+                        continue;
                     }
+
+                    markedCount += markOverwrittenWrites(
+                            tx,
+                            trackedWrites,
+                            candidate.targetVariable(),
+                            candidate.sideEffectWrites()
+                    );
 
                     applyWrites(variableVersions, candidate.targetVariable(), candidate.sideEffectWrites());
-                    lastAssignments.remove(candidate.targetVariable());
-                    for (String sideEffectWrite : candidate.sideEffectWrites()) {
-                        lastAssignments.remove(sideEffectWrite);
-                    }
 
-                    if (!redundant && candidate.sideEffectWrites().isEmpty()) {
-                        lastAssignments.put(candidate.targetVariable(), snapshot(candidate, variableVersions));
+                    if (candidate.sideEffectWrites().isEmpty()) {
+                        trackedWrites.put(candidate.targetVariable(), trackedWrite(candidate, variableVersions));
                     }
                 }
                 continue;
@@ -153,6 +159,7 @@ public final class RepeatedAssignmentAnalyzer {
                         astChildrenCache
                 );
                 if (writtenVariable != null) {
+                    trackedWrites.remove(writtenVariable);
                     incrementVersion(variableVersions, writtenVariable);
                     continue;
                 }
@@ -167,7 +174,7 @@ public final class RepeatedAssignmentAnalyzer {
                     || labels.contains("CaseStatement")
                     || labels.contains("DefaultStatement")) {
                 variableVersions.clear();
-                lastAssignments.clear();
+                trackedWrites.clear();
             }
         }
 
@@ -265,14 +272,14 @@ public final class RepeatedAssignmentAnalyzer {
 
     private boolean isRedundant(
             AssignmentCandidate candidate,
-            Map<String, AssignmentSnapshot> lastAssignments,
+            Map<String, TrackedWrite> trackedWrites,
             Map<String, Integer> variableVersions
     ) {
         if (!candidate.sideEffectWrites().isEmpty()) {
             return false;
         }
 
-        AssignmentSnapshot previous = lastAssignments.get(candidate.targetVariable());
+        TrackedWrite previous = trackedWrites.get(candidate.targetVariable());
         if (previous == null) {
             return false;
         }
@@ -294,7 +301,7 @@ public final class RepeatedAssignmentAnalyzer {
         return true;
     }
 
-    private AssignmentSnapshot snapshot(
+    private TrackedWrite trackedWrite(
             AssignmentCandidate candidate,
             Map<String, Integer> variableVersions
     ) {
@@ -306,7 +313,12 @@ public final class RepeatedAssignmentAnalyzer {
             snapshotVersions.put(variable, variableVersions.getOrDefault(variable, 0));
         }
 
-        return new AssignmentSnapshot(candidate.expressionKey(), snapshotVersions);
+        return new TrackedWrite(
+                candidate.sourceNodeId(),
+                candidate.targetVariable(),
+                candidate.expressionKey(),
+                snapshotVersions
+        );
     }
 
     private void applyWrites(
@@ -318,6 +330,43 @@ public final class RepeatedAssignmentAnalyzer {
         for (String sideEffectWrite : sideEffectWrites) {
             incrementVersion(variableVersions, sideEffectWrite);
         }
+    }
+
+    private void markVariablesAsUsed(
+            Map<String, TrackedWrite> trackedWrites,
+            Set<String> variables
+    ) {
+        for (String variable : variables) {
+            trackedWrites.remove(variable);
+        }
+    }
+
+    private int markOverwrittenWrites(
+            TransactionContext tx,
+            Map<String, TrackedWrite> trackedWrites,
+            String targetVariable,
+            Set<String> sideEffectWrites
+    ) {
+        int markedCount = 0;
+        markedCount += markTrackedWriteDead(tx, trackedWrites, targetVariable);
+        for (String sideEffectWrite : sideEffectWrites) {
+            markedCount += markTrackedWriteDead(tx, trackedWrites, sideEffectWrite);
+        }
+        return markedCount;
+    }
+
+    private int markTrackedWriteDead(
+            TransactionContext tx,
+            Map<String, TrackedWrite> trackedWrites,
+            String variable
+    ) {
+        TrackedWrite trackedWrite = trackedWrites.remove(variable);
+        if (trackedWrite == null) {
+            return 0;
+        }
+
+        tx.run(MARK_DEAD_CODE_QUERY, Values.parameters("nodeId", trackedWrite.sourceNodeId())).consume();
+        return 1;
     }
 
     private String extractUnaryMutationTarget(
@@ -653,7 +702,9 @@ public final class RepeatedAssignmentAnalyzer {
     ) {
     }
 
-    private record AssignmentSnapshot(
+    private record TrackedWrite(
+            String sourceNodeId,
+            String targetVariable,
             String expressionKey,
             Map<String, Integer> variableVersions
     ) {
