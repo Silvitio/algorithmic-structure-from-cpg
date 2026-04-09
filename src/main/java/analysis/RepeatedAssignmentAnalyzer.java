@@ -50,6 +50,19 @@ public final class RepeatedAssignmentAnalyzer {
               elementId(lhs) AS lhsNodeId,
               elementId(rhs) AS rhsNodeId
             """;
+    private static final String IF_DETAILS_QUERY = """
+            MATCH (statement)
+            WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:CONDITION]->(condition)
+            OPTIONAL MATCH (statement)-[:THEN_STATEMENT]->(thenBranch)
+            OPTIONAL MATCH (statement)-[:ELSE_STATEMENT]->(elseBranch)
+            RETURN
+              elementId(condition) AS conditionNodeId,
+              elementId(thenBranch) AS thenNodeId,
+              labels(thenBranch) AS thenLabels,
+              elementId(elseBranch) AS elseNodeId,
+              labels(elseBranch) AS elseLabels
+            """;
     private static final String NODE_QUERY = """
             MATCH (node)
             WHERE elementId(node) = $nodeId
@@ -165,8 +178,21 @@ public final class RepeatedAssignmentAnalyzer {
                 }
             }
 
-            if (labels.contains("IfStatement")
-                    || labels.contains("WhileStatement")
+            if (labels.contains("IfStatement")) {
+                StatementEffects effects = collectIfEffects(
+                        tx,
+                        statementNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        assignmentSidesCache
+                );
+                markVariablesAsUsed(trackedWrites, effects.readVariables());
+                markedCount += markOverwrittenWrites(tx, trackedWrites, effects.writtenVariables(), Set.of());
+                applyWrites(variableVersions, effects.writtenVariables());
+                continue;
+            }
+
+            if (labels.contains("WhileStatement")
                     || labels.contains("ForStatement")
                     || labels.contains("DoStatement")
                     || labels.contains("DoWhileStatement")
@@ -332,6 +358,15 @@ public final class RepeatedAssignmentAnalyzer {
         }
     }
 
+    private void applyWrites(
+            Map<String, Integer> variableVersions,
+            Set<String> writtenVariables
+    ) {
+        for (String writtenVariable : writtenVariables) {
+            incrementVersion(variableVersions, writtenVariable);
+        }
+    }
+
     private void markVariablesAsUsed(
             Map<String, TrackedWrite> trackedWrites,
             Set<String> variables
@@ -349,6 +384,22 @@ public final class RepeatedAssignmentAnalyzer {
     ) {
         int markedCount = 0;
         markedCount += markTrackedWriteDead(tx, trackedWrites, targetVariable);
+        for (String sideEffectWrite : sideEffectWrites) {
+            markedCount += markTrackedWriteDead(tx, trackedWrites, sideEffectWrite);
+        }
+        return markedCount;
+    }
+
+    private int markOverwrittenWrites(
+            TransactionContext tx,
+            Map<String, TrackedWrite> trackedWrites,
+            Set<String> targetVariables,
+            Set<String> sideEffectWrites
+    ) {
+        int markedCount = 0;
+        for (String targetVariable : targetVariables) {
+            markedCount += markTrackedWriteDead(tx, trackedWrites, targetVariable);
+        }
         for (String sideEffectWrite : sideEffectWrites) {
             markedCount += markTrackedWriteDead(tx, trackedWrites, sideEffectWrite);
         }
@@ -406,6 +457,216 @@ public final class RepeatedAssignmentAnalyzer {
             return firstNonBlank(nodeInfo.name(), nodeInfo.code());
         }
         return null;
+    }
+
+    private StatementEffects collectIfEffects(
+            TransactionContext tx,
+            String statementNodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache
+    ) {
+        Record record = tx.run(
+                IF_DETAILS_QUERY,
+                Values.parameters("statementNodeId", statementNodeId)
+        ).single();
+
+        Set<String> reads = new HashSet<>();
+        Set<String> writes = new HashSet<>();
+
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        if (conditionNodeId != null) {
+            reads.addAll(collectDependencies(tx, conditionNodeId, nodeCache, astChildrenCache, new HashSet<>()));
+            writes.addAll(collectMutations(
+                    tx,
+                    conditionNodeId,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    new HashSet<>()
+            ));
+        }
+
+        collectOptionalStatementEffects(
+                tx,
+                getNullableString(record, "thenNodeId"),
+                record.get("thenLabels"),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                reads,
+                writes
+        );
+        collectOptionalStatementEffects(
+                tx,
+                getNullableString(record, "elseNodeId"),
+                record.get("elseLabels"),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                reads,
+                writes
+        );
+
+        return new StatementEffects(reads, writes);
+    }
+
+    private void collectOptionalStatementEffects(
+            TransactionContext tx,
+            String statementNodeId,
+            Value labelsValue,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache,
+            Set<String> reads,
+            Set<String> writes
+    ) {
+        if (statementNodeId == null) {
+            return;
+        }
+
+        StatementEffects effects = collectStatementEffects(
+                tx,
+                statementNodeId,
+                labelsValue == null || labelsValue.isNull() ? List.of() : labelsValue.asList(Value::asString),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache
+        );
+        reads.addAll(effects.readVariables());
+        writes.addAll(effects.writtenVariables());
+    }
+
+    private StatementEffects collectStatementEffects(
+            TransactionContext tx,
+            String statementNodeId,
+            List<String> labels,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache
+    ) {
+        if (labels.contains("Block")) {
+            Set<String> reads = new HashSet<>();
+            Set<String> writes = new HashSet<>();
+
+            List<Record> statementRecords = tx.run(
+                    BLOCK_STATEMENTS_QUERY,
+                    Values.parameters("blockNodeId", statementNodeId)
+            ).list();
+            for (Record statementRecord : statementRecords) {
+                StatementEffects nested = collectStatementEffects(
+                        tx,
+                        statementRecord.get("statementNodeId").asString(),
+                        statementRecord.get("labels").asList(Value::asString),
+                        nodeCache,
+                        astChildrenCache,
+                        assignmentSidesCache
+                );
+                reads.addAll(nested.readVariables());
+                writes.addAll(nested.writtenVariables());
+            }
+
+            return new StatementEffects(reads, writes);
+        }
+
+        if (labels.contains("DeclarationStatement")) {
+            Set<String> reads = new HashSet<>();
+            Set<String> writes = new HashSet<>();
+
+            List<Record> declarationRecords = tx.run(
+                    DECLARATIONS_QUERY,
+                    Values.parameters("statementNodeId", statementNodeId)
+            ).list();
+
+            for (Record declarationRecord : declarationRecords) {
+                String declarationName = getNullableString(declarationRecord, "declarationName");
+                String initializerNodeId = getNullableString(declarationRecord, "initializerNodeId");
+                if (declarationName == null || declarationName.isBlank()) {
+                    continue;
+                }
+                if (initializerNodeId != null) {
+                    reads.addAll(collectDependencies(tx, initializerNodeId, nodeCache, astChildrenCache, new HashSet<>()));
+                    writes.addAll(collectMutations(
+                            tx,
+                            initializerNodeId,
+                            nodeCache,
+                            astChildrenCache,
+                            assignmentSidesCache,
+                            new HashSet<>()
+                    ));
+                    writes.add(declarationName);
+                }
+            }
+
+            return new StatementEffects(reads, writes);
+        }
+
+        if (labels.contains("AssignExpression")) {
+            AssignmentSides sides = loadAssignmentSides(tx, statementNodeId, assignmentSidesCache);
+            if (sides == null) {
+                return StatementEffects.empty();
+            }
+
+            Set<String> reads = new HashSet<>();
+            Set<String> writes = new HashSet<>();
+
+            if (sides.rhsNodeId() != null) {
+                reads.addAll(collectDependencies(tx, sides.rhsNodeId(), nodeCache, astChildrenCache, new HashSet<>()));
+                writes.addAll(collectMutations(
+                        tx,
+                        sides.rhsNodeId(),
+                        nodeCache,
+                        astChildrenCache,
+                        assignmentSidesCache,
+                        new HashSet<>()
+                ));
+            }
+
+            String targetVariable = sides.lhsNodeId() == null ? null : extractSimpleVariable(tx, sides.lhsNodeId(), nodeCache);
+            if (targetVariable != null) {
+                writes.add(targetVariable);
+            } else if (sides.lhsNodeId() != null) {
+                reads.addAll(collectDependencies(tx, sides.lhsNodeId(), nodeCache, astChildrenCache, new HashSet<>()));
+                writes.addAll(collectMutations(
+                        tx,
+                        sides.lhsNodeId(),
+                        nodeCache,
+                        astChildrenCache,
+                        assignmentSidesCache,
+                        new HashSet<>()
+                ));
+            }
+
+            return new StatementEffects(reads, writes);
+        }
+
+        if (labels.contains("UnaryOperator")) {
+            Set<String> reads = collectDependencies(tx, statementNodeId, nodeCache, astChildrenCache, new HashSet<>());
+            Set<String> writes = collectMutations(
+                    tx,
+                    statementNodeId,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    new HashSet<>()
+            );
+            return new StatementEffects(reads, writes);
+        }
+
+        if (labels.contains("IfStatement")) {
+            return collectIfEffects(tx, statementNodeId, nodeCache, astChildrenCache, assignmentSidesCache);
+        }
+
+        Set<String> reads = collectDependencies(tx, statementNodeId, nodeCache, astChildrenCache, new HashSet<>());
+        Set<String> writes = collectMutations(
+                tx,
+                statementNodeId,
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                new HashSet<>()
+        );
+        return new StatementEffects(reads, writes);
     }
 
     private String buildExpressionKey(
@@ -708,5 +969,14 @@ public final class RepeatedAssignmentAnalyzer {
             String expressionKey,
             Map<String, Integer> variableVersions
     ) {
+    }
+
+    private record StatementEffects(
+            Set<String> readVariables,
+            Set<String> writtenVariables
+    ) {
+        private static StatementEffects empty() {
+            return new StatementEffects(Set.of(), Set.of());
+        }
     }
 }
