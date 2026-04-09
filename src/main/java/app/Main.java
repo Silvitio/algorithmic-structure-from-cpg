@@ -1,5 +1,6 @@
 package app;
 
+import analysis.RepeatedAssignmentAnalyzer;
 import analysis.SelfAssignmentAnalyzer;
 import cpg.AlgoGraphBuilder;
 import cpg.AlgoGraphBuilder.BuildSummary;
@@ -61,7 +62,10 @@ public class Main {
         try (Driver driver = GraphDatabase.driver(uri, AuthTokens.basic(user, password));
              Session session = driver.session(SessionConfig.forDatabase("neo4j"))) {
             SelfAssignmentAnalyzer selfAssignmentAnalyzer = new SelfAssignmentAnalyzer();
-            int deadCodeMarked = selfAssignmentAnalyzer.markDeadCode(session);
+            int selfAssignmentDeadCodeMarked = selfAssignmentAnalyzer.markDeadCode(session);
+
+            RepeatedAssignmentAnalyzer repeatedAssignmentAnalyzer = new RepeatedAssignmentAnalyzer();
+            int repeatedAssignmentDeadCodeMarked = repeatedAssignmentAnalyzer.markDeadCode(session);
 
             AlgoGraphBuilder algoGraphBuilder = new AlgoGraphBuilder();
             BuildSummary summary = algoGraphBuilder.rebuild(session);
@@ -69,6 +73,8 @@ public class Main {
             System.out.println("Algo graph rebuilt");
             System.out.printf(
                     """
+                    selfAssignmentDeadCodeMarked=%d
+                    repeatedAssignmentDeadCodeMarked=%d
                     deadCodeMarked=%d
                     functions=%d
                     algoNodes=%d
@@ -78,7 +84,9 @@ public class Main {
                     branches=%d
 
                     """,
-                    deadCodeMarked,
+                    selfAssignmentDeadCodeMarked,
+                    repeatedAssignmentDeadCodeMarked,
+                    selfAssignmentDeadCodeMarked + repeatedAssignmentDeadCodeMarked,
                     summary.functions().size(),
                     summary.algoNodes(),
                     summary.codeActions(),
