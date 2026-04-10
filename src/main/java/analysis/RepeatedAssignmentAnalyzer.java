@@ -63,6 +63,32 @@ public final class RepeatedAssignmentAnalyzer {
               elementId(elseBranch) AS elseNodeId,
               labels(elseBranch) AS elseLabels
             """;
+    private static final String WHILE_DETAILS_QUERY = """
+            MATCH (statement)
+            WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:CONDITION]->(condition)
+            OPTIONAL MATCH (statement)-[:STATEMENT]->(body)
+            RETURN
+              elementId(condition) AS conditionNodeId,
+              elementId(body) AS bodyNodeId,
+              labels(body) AS bodyLabels
+            """;
+    private static final String FOR_DETAILS_QUERY = """
+            MATCH (statement)
+            WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:INITIALIZER_STATEMENT]->(initializer)
+            OPTIONAL MATCH (statement)-[:CONDITION]->(condition)
+            OPTIONAL MATCH (statement)-[:STATEMENT]->(body)
+            OPTIONAL MATCH (statement)-[:ITERATION_STATEMENT]->(iteration)
+            RETURN
+              elementId(initializer) AS initializerNodeId,
+              labels(initializer) AS initializerLabels,
+              elementId(condition) AS conditionNodeId,
+              elementId(body) AS bodyNodeId,
+              labels(body) AS bodyLabels,
+              elementId(iteration) AS iterationNodeId,
+              labels(iteration) AS iterationLabels
+            """;
     private static final String NODE_QUERY = """
             MATCH (node)
             WHERE elementId(node) = $nodeId
@@ -187,7 +213,7 @@ public final class RepeatedAssignmentAnalyzer {
                         assignmentSidesCache
                 );
                 markVariablesAsUsed(trackedWrites, effects.readVariables());
-                markedCount += markOverwrittenWrites(tx, trackedWrites, effects.writtenVariables(), Set.of());
+                removeTrackedWrites(trackedWrites, effects.writtenVariables());
                 applyWrites(variableVersions, effects.writtenVariables());
                 continue;
             }
@@ -195,7 +221,22 @@ public final class RepeatedAssignmentAnalyzer {
             if (labels.contains("WhileStatement")
                     || labels.contains("ForStatement")
                     || labels.contains("DoStatement")
-                    || labels.contains("DoWhileStatement")
+                    || labels.contains("DoWhileStatement")) {
+                StatementEffects effects = collectLoopEffects(
+                        tx,
+                        statementNodeId,
+                        labels,
+                        nodeCache,
+                        astChildrenCache,
+                        assignmentSidesCache
+                );
+                markVariablesAsUsed(trackedWrites, effects.readVariables());
+                removeTrackedWrites(trackedWrites, effects.writtenVariables());
+                applyWrites(variableVersions, effects.writtenVariables());
+                continue;
+            }
+
+            if (labels.contains("SwitchStatement")
                     || labels.contains("SwitchStatement")
                     || labels.contains("CaseStatement")
                     || labels.contains("DefaultStatement")) {
@@ -406,6 +447,15 @@ public final class RepeatedAssignmentAnalyzer {
         return markedCount;
     }
 
+    private void removeTrackedWrites(
+            Map<String, TrackedWrite> trackedWrites,
+            Set<String> variables
+    ) {
+        for (String variable : variables) {
+            trackedWrites.remove(variable);
+        }
+    }
+
     private int markTrackedWriteDead(
             TransactionContext tx,
             Map<String, TrackedWrite> trackedWrites,
@@ -501,6 +551,126 @@ public final class RepeatedAssignmentAnalyzer {
                 tx,
                 getNullableString(record, "elseNodeId"),
                 record.get("elseLabels"),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                reads,
+                writes
+        );
+
+        return new StatementEffects(reads, writes);
+    }
+
+    private StatementEffects collectLoopEffects(
+            TransactionContext tx,
+            String statementNodeId,
+            List<String> labels,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache
+    ) {
+        if (labels.contains("ForStatement")) {
+            return collectForEffects(tx, statementNodeId, nodeCache, astChildrenCache, assignmentSidesCache);
+        }
+
+        return collectWhileLikeEffects(tx, statementNodeId, nodeCache, astChildrenCache, assignmentSidesCache);
+    }
+
+    private StatementEffects collectWhileLikeEffects(
+            TransactionContext tx,
+            String statementNodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache
+    ) {
+        Record record = tx.run(
+                WHILE_DETAILS_QUERY,
+                Values.parameters("statementNodeId", statementNodeId)
+        ).single();
+
+        Set<String> reads = new HashSet<>();
+        Set<String> writes = new HashSet<>();
+
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        if (conditionNodeId != null) {
+            reads.addAll(collectDependencies(tx, conditionNodeId, nodeCache, astChildrenCache, new HashSet<>()));
+            writes.addAll(collectMutations(
+                    tx,
+                    conditionNodeId,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    new HashSet<>()
+            ));
+        }
+
+        collectOptionalStatementEffects(
+                tx,
+                getNullableString(record, "bodyNodeId"),
+                record.get("bodyLabels"),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                reads,
+                writes
+        );
+
+        return new StatementEffects(reads, writes);
+    }
+
+    private StatementEffects collectForEffects(
+            TransactionContext tx,
+            String statementNodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache
+    ) {
+        Record record = tx.run(
+                FOR_DETAILS_QUERY,
+                Values.parameters("statementNodeId", statementNodeId)
+        ).single();
+
+        Set<String> reads = new HashSet<>();
+        Set<String> writes = new HashSet<>();
+
+        collectOptionalStatementEffects(
+                tx,
+                getNullableString(record, "initializerNodeId"),
+                record.get("initializerLabels"),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                reads,
+                writes
+        );
+
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        if (conditionNodeId != null) {
+            reads.addAll(collectDependencies(tx, conditionNodeId, nodeCache, astChildrenCache, new HashSet<>()));
+            writes.addAll(collectMutations(
+                    tx,
+                    conditionNodeId,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    new HashSet<>()
+            ));
+        }
+
+        collectOptionalStatementEffects(
+                tx,
+                getNullableString(record, "bodyNodeId"),
+                record.get("bodyLabels"),
+                nodeCache,
+                astChildrenCache,
+                assignmentSidesCache,
+                reads,
+                writes
+        );
+        collectOptionalStatementEffects(
+                tx,
+                getNullableString(record, "iterationNodeId"),
+                record.get("iterationLabels"),
                 nodeCache,
                 astChildrenCache,
                 assignmentSidesCache,
