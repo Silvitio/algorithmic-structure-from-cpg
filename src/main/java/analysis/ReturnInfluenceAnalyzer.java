@@ -85,8 +85,10 @@ public final class ReturnInfluenceAnalyzer {
     private static final String WHILE_BODY_QUERY = """
             MATCH (statement)
             WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:CONDITION]->(condition)
             OPTIONAL MATCH (statement)-[:STATEMENT]->(body)
             RETURN
+              elementId(condition) AS conditionNodeId,
               elementId(body) AS bodyNodeId,
               labels(body) AS bodyLabels
             """;
@@ -94,11 +96,13 @@ public final class ReturnInfluenceAnalyzer {
             MATCH (statement)
             WHERE elementId(statement) = $statementNodeId
             OPTIONAL MATCH (statement)-[:INITIALIZER_STATEMENT]->(initializer)
+            OPTIONAL MATCH (statement)-[:CONDITION]->(condition)
             OPTIONAL MATCH (statement)-[:STATEMENT]->(body)
             OPTIONAL MATCH (statement)-[:ITERATION_STATEMENT]->(iteration)
             RETURN
               elementId(initializer) AS initializerNodeId,
               labels(initializer) AS initializerLabels,
+              elementId(condition) AS conditionNodeId,
               elementId(body) AS bodyNodeId,
               labels(body) AS bodyLabels,
               elementId(iteration) AS iterationNodeId,
@@ -590,21 +594,50 @@ public final class ReturnInfluenceAnalyzer {
                 Values.parameters("statementNodeId", statementNodeId)
         ).single();
 
-        Set<String> bodyNeeded = analyzeOptionalStatement(
-                tx,
-                getNullableString(record, "bodyNodeId"),
-                record.get("bodyLabels"),
-                neededAfter,
-                markedNodeIds,
-                nodeCache,
-                astChildrenCache,
-                assignmentSidesCache,
-                subscriptBaseCache
-        );
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        Set<String> conditionUses = conditionNodeId == null
+                ? Set.of()
+                : collectReadEntities(
+                        tx,
+                        conditionNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                );
 
-        Set<String> result = new LinkedHashSet<>(neededAfter);
-        result.addAll(bodyNeeded);
-        return result;
+        Set<String> seed = new LinkedHashSet<>(neededAfter);
+        Set<String> previousSeed = null;
+        LinkedHashSet<String> loopMarked = new LinkedHashSet<>();
+
+        while (!seed.equals(previousSeed)) {
+            previousSeed = new LinkedHashSet<>(seed);
+            LinkedHashSet<String> passMarked = new LinkedHashSet<>();
+
+            Set<String> bodyNeeded = analyzeOptionalStatement(
+                    tx,
+                    getNullableString(record, "bodyNodeId"),
+                    record.get("bodyLabels"),
+                    seed,
+                    passMarked,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    subscriptBaseCache
+            );
+
+            Set<String> newSeed = new LinkedHashSet<>(neededAfter);
+            newSeed.addAll(bodyNeeded);
+            if (!passMarked.isEmpty()) {
+                newSeed.addAll(conditionUses);
+            }
+
+            loopMarked.addAll(passMarked);
+            seed = newSeed;
+        }
+
+        markedNodeIds.addAll(loopMarked);
+        return seed;
     }
 
     private Set<String> analyzeDoWhileStatement(
@@ -622,17 +655,50 @@ public final class ReturnInfluenceAnalyzer {
                 Values.parameters("statementNodeId", statementNodeId)
         ).single();
 
-        return analyzeOptionalStatement(
-                tx,
-                getNullableString(record, "bodyNodeId"),
-                record.get("bodyLabels"),
-                neededAfter,
-                markedNodeIds,
-                nodeCache,
-                astChildrenCache,
-                assignmentSidesCache,
-                subscriptBaseCache
-        );
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        Set<String> conditionUses = conditionNodeId == null
+                ? Set.of()
+                : collectReadEntities(
+                        tx,
+                        conditionNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                );
+
+        Set<String> seed = new LinkedHashSet<>(neededAfter);
+        Set<String> previousSeed = null;
+        LinkedHashSet<String> loopMarked = new LinkedHashSet<>();
+
+        while (!seed.equals(previousSeed)) {
+            previousSeed = new LinkedHashSet<>(seed);
+            LinkedHashSet<String> passMarked = new LinkedHashSet<>();
+
+            Set<String> bodyNeeded = analyzeOptionalStatement(
+                    tx,
+                    getNullableString(record, "bodyNodeId"),
+                    record.get("bodyLabels"),
+                    seed,
+                    passMarked,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    subscriptBaseCache
+            );
+
+            Set<String> newSeed = new LinkedHashSet<>(neededAfter);
+            newSeed.addAll(bodyNeeded);
+            if (!passMarked.isEmpty()) {
+                newSeed.addAll(conditionUses);
+            }
+
+            loopMarked.addAll(passMarked);
+            seed = newSeed;
+        }
+
+        markedNodeIds.addAll(loopMarked);
+        return seed;
     }
 
     private Set<String> analyzeForStatement(
@@ -650,38 +716,67 @@ public final class ReturnInfluenceAnalyzer {
                 Values.parameters("statementNodeId", statementNodeId)
         ).single();
 
-        Set<String> afterIteration = analyzeOptionalStatement(
-                tx,
-                getNullableString(record, "iterationNodeId"),
-                record.get("iterationLabels"),
-                neededAfter,
-                markedNodeIds,
-                nodeCache,
-                astChildrenCache,
-                assignmentSidesCache,
-                subscriptBaseCache
-        );
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        Set<String> conditionUses = conditionNodeId == null
+                ? Set.of()
+                : collectReadEntities(
+                        tx,
+                        conditionNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                );
 
-        Set<String> beforeBody = analyzeOptionalStatement(
-                tx,
-                getNullableString(record, "bodyNodeId"),
-                record.get("bodyLabels"),
-                afterIteration,
-                markedNodeIds,
-                nodeCache,
-                astChildrenCache,
-                assignmentSidesCache,
-                subscriptBaseCache
-        );
+        Set<String> seed = new LinkedHashSet<>(neededAfter);
+        Set<String> previousSeed = null;
+        LinkedHashSet<String> loopMarked = new LinkedHashSet<>();
 
-        Set<String> beforeLoop = new LinkedHashSet<>(neededAfter);
-        beforeLoop.addAll(beforeBody);
+        while (!seed.equals(previousSeed)) {
+            previousSeed = new LinkedHashSet<>(seed);
+            LinkedHashSet<String> passMarked = new LinkedHashSet<>();
+
+            Set<String> afterIteration = analyzeOptionalStatement(
+                    tx,
+                    getNullableString(record, "iterationNodeId"),
+                    record.get("iterationLabels"),
+                    seed,
+                    passMarked,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    subscriptBaseCache
+            );
+
+            Set<String> beforeBody = analyzeOptionalStatement(
+                    tx,
+                    getNullableString(record, "bodyNodeId"),
+                    record.get("bodyLabels"),
+                    afterIteration,
+                    passMarked,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    subscriptBaseCache
+            );
+
+            Set<String> newSeed = new LinkedHashSet<>(neededAfter);
+            newSeed.addAll(beforeBody);
+            if (!passMarked.isEmpty()) {
+                newSeed.addAll(conditionUses);
+            }
+
+            loopMarked.addAll(passMarked);
+            seed = newSeed;
+        }
+
+        markedNodeIds.addAll(loopMarked);
 
         return analyzeOptionalStatement(
                 tx,
                 getNullableString(record, "initializerNodeId"),
                 record.get("initializerLabels"),
-                beforeLoop,
+                seed,
                 markedNodeIds,
                 nodeCache,
                 astChildrenCache,
