@@ -182,6 +182,17 @@ public final class ReturnInfluenceAnalyzer {
                         new LinkedHashSet<>()
                 );
 
+                if (neededEntities.isEmpty()) {
+                    functions.add(new FunctionInfluence(
+                            functionName,
+                            functionNodeId,
+                            0,
+                            List.of(),
+                            true
+                    ));
+                    continue;
+                }
+
                 LinkedHashSet<String> markedNodeIds = new LinkedHashSet<>();
                 analyzeBlock(
                         tx,
@@ -408,9 +419,8 @@ public final class ReturnInfluenceAnalyzer {
 
             if (intersects(needed, defs)) {
                 markedNodeIds.add(declarationNodeId);
+                needed = transfer(needed, defs, uses);
             }
-
-            needed = transfer(needed, defs, uses);
         }
 
         return needed;
@@ -464,9 +474,10 @@ public final class ReturnInfluenceAnalyzer {
 
         if (intersects(neededAfter, defs)) {
             markedNodeIds.add(statementNodeId);
+            return transfer(neededAfter, defs, uses);
         }
 
-        return transfer(neededAfter, defs, uses);
+        return new LinkedHashSet<>(neededAfter);
     }
 
     private Set<String> analyzeUnaryStatement(
@@ -512,9 +523,10 @@ public final class ReturnInfluenceAnalyzer {
 
         if (intersects(neededAfter, defs)) {
             markedNodeIds.add(statementNodeId);
+            return transfer(neededAfter, defs, uses);
         }
 
-        return transfer(neededAfter, defs, uses);
+        return new LinkedHashSet<>(neededAfter);
     }
 
     private Set<String> analyzeIfStatement(
