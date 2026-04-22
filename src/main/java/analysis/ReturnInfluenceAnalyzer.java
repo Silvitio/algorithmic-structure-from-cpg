@@ -127,6 +127,18 @@ public final class ReturnInfluenceAnalyzer {
               elementId(child) AS childNodeId
             ORDER BY childIndex, childNodeId
             """;
+    private static final String CALL_INFO_QUERY = """
+            MATCH (call)
+            WHERE elementId(call) = $callNodeId
+            OPTIONAL MATCH (call)-[:OPERATOR_BASE]->(callee)
+            WITH call, callee
+            OPTIONAL MATCH (call)-[argRel:ARGUMENTS]->(argument)
+            WITH callee, argRel, argument
+            ORDER BY argRel.index, elementId(argument)
+            RETURN
+              elementId(callee) AS calleeNodeId,
+              [nodeId IN collect(elementId(argument)) WHERE nodeId IS NOT NULL | nodeId] AS argumentNodeIds
+            """;
     private static final String SUBSCRIPT_BASE_QUERY = """
             MATCH (node)
             WHERE elementId(node) = $nodeId
@@ -161,40 +173,29 @@ public final class ReturnInfluenceAnalyzer {
                 String bodyNodeId = functionRecord.get("bodyNodeId").asString();
                 List<String> returnNodeIds = functionRecord.get("returnNodeIds").asList(Value::asString);
 
-                if (returnNodeIds.size() != 1) {
+                if (returnNodeIds.size() > 1) {
                     functions.add(new FunctionInfluence(functionName, functionNodeId, 0, List.of(), false));
                     continue;
                 }
 
-                String returnNodeId = returnNodeIds.get(0);
-                Record returnValueRecord = tx.run(
-                        RETURN_VALUE_QUERY,
-                        Values.parameters("returnNodeId", returnNodeId)
-                ).single();
-                String returnValueNodeId = getNullableString(returnValueRecord, "returnValueNodeId");
-                if (returnValueNodeId == null) {
-                    functions.add(new FunctionInfluence(functionName, functionNodeId, 0, List.of(), false));
-                    continue;
-                }
-
-                Set<String> neededEntities = collectReadEntities(
-                        tx,
-                        returnValueNodeId,
-                        nodeCache,
-                        astChildrenCache,
-                        subscriptBaseCache,
-                        new LinkedHashSet<>()
-                );
-
-                if (neededEntities.isEmpty()) {
-                    functions.add(new FunctionInfluence(
-                            functionName,
-                            functionNodeId,
-                            0,
-                            List.of(),
-                            true
-                    ));
-                    continue;
+                Set<String> neededEntities = new LinkedHashSet<>();
+                if (returnNodeIds.size() == 1) {
+                    String returnNodeId = returnNodeIds.get(0);
+                    Record returnValueRecord = tx.run(
+                            RETURN_VALUE_QUERY,
+                            Values.parameters("returnNodeId", returnNodeId)
+                    ).single();
+                    String returnValueNodeId = getNullableString(returnValueRecord, "returnValueNodeId");
+                    if (returnValueNodeId != null) {
+                        neededEntities.addAll(collectReadEntities(
+                                tx,
+                                returnValueNodeId,
+                                nodeCache,
+                                astChildrenCache,
+                                subscriptBaseCache,
+                                new LinkedHashSet<>()
+                        ));
+                    }
                 }
 
                 LinkedHashSet<String> markedNodeIds = new LinkedHashSet<>();
@@ -332,6 +333,18 @@ public final class ReturnInfluenceAnalyzer {
             );
         }
 
+        if (isCallExpression(labels)) {
+            return analyzeCallStatement(
+                    tx,
+                    statementNodeId,
+                    neededAfter,
+                    markedNodeIds,
+                    nodeCache,
+                    astChildrenCache,
+                    subscriptBaseCache
+            );
+        }
+
         if (labels.contains("IfStatement")) {
             return analyzeIfStatement(
                     tx,
@@ -382,6 +395,68 @@ public final class ReturnInfluenceAnalyzer {
                     assignmentSidesCache,
                     subscriptBaseCache
             );
+        }
+
+        return new LinkedHashSet<>(neededAfter);
+    }
+
+    private Set<String> analyzeCallStatement(
+            TransactionContext tx,
+            String statementNodeId,
+            Set<String> neededAfter,
+            LinkedHashSet<String> markedNodeIds,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, String> subscriptBaseCache
+    ) {
+        CallInfo callInfo = loadCallInfo(tx, statementNodeId, nodeCache, astChildrenCache);
+        if (callInfo == null || callInfo.callName() == null) {
+            return new LinkedHashSet<>(neededAfter);
+        }
+
+        if ("printf".equals(callInfo.callName())) {
+            Set<String> uses = new LinkedHashSet<>();
+            for (String argumentNodeId : callInfo.argumentNodeIds()) {
+                uses.addAll(collectReadEntities(
+                        tx,
+                        argumentNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                ));
+            }
+
+            markedNodeIds.add(statementNodeId);
+            Set<String> neededBefore = new LinkedHashSet<>(neededAfter);
+            neededBefore.addAll(uses);
+            return neededBefore;
+        }
+
+        if ("scanf".equals(callInfo.callName())) {
+            Set<String> defs = new LinkedHashSet<>();
+            Set<String> uses = new LinkedHashSet<>();
+            for (String argumentNodeId : callInfo.argumentNodeIds()) {
+                defs.addAll(collectWrittenEntities(
+                        tx,
+                        argumentNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                ));
+                uses.addAll(collectScanfAddressingEntities(
+                        tx,
+                        argumentNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                ));
+            }
+
+            markedNodeIds.add(statementNodeId);
+            return transfer(neededAfter, defs, uses);
         }
 
         return new LinkedHashSet<>(neededAfter);
@@ -856,6 +931,14 @@ public final class ReturnInfluenceAnalyzer {
                             visiting
                     ));
                 }
+                entities.addAll(collectArraySummaryEntities(
+                        tx,
+                        nodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                ));
                 for (String childNodeId : loadAstChildren(tx, nodeId, astChildrenCache)) {
                     entities.addAll(collectReadEntities(
                             tx,
@@ -914,9 +997,65 @@ public final class ReturnInfluenceAnalyzer {
             }
 
             if (isSubscriptExpression(nodeInfo.labels())) {
+                entities.addAll(collectArraySummaryEntities(
+                        tx,
+                        nodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                ));
+                return entities;
+            }
+
+            for (String childNodeId : loadAstChildren(tx, nodeId, astChildrenCache)) {
+                entities.addAll(collectWrittenEntities(
+                        tx,
+                        childNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        visiting
+                ));
+            }
+
+            return entities;
+        } finally {
+            visiting.remove(nodeId);
+        }
+    }
+
+    private Set<String> collectArraySummaryEntities(
+            TransactionContext tx,
+            String nodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, String> subscriptBaseCache,
+            Set<String> visiting
+    ) {
+        Set<String> entities = new LinkedHashSet<>();
+        if (nodeId == null || !visiting.add(nodeId)) {
+            return entities;
+        }
+
+        try {
+            NodeInfo nodeInfo = loadNodeInfo(tx, nodeId, nodeCache);
+            if (nodeInfo == null) {
+                return entities;
+            }
+
+            if (nodeInfo.labels().contains("Reference")) {
+                String entity = firstNonBlank(nodeInfo.name(), nodeInfo.code());
+                if (entity != null && !entity.isBlank()) {
+                    entities.add(arraySummaryEntity(entity));
+                }
+                return entities;
+            }
+
+            if (isSubscriptExpression(nodeInfo.labels())) {
                 String baseNodeId = loadSubscriptBase(tx, nodeId, subscriptBaseCache);
                 if (baseNodeId != null) {
-                    entities.addAll(collectWrittenEntities(
+                    entities.addAll(collectArraySummaryEntities(
                             tx,
                             baseNodeId,
                             nodeCache,
@@ -929,7 +1068,88 @@ public final class ReturnInfluenceAnalyzer {
             }
 
             for (String childNodeId : loadAstChildren(tx, nodeId, astChildrenCache)) {
-                entities.addAll(collectWrittenEntities(
+                entities.addAll(collectArraySummaryEntities(
+                        tx,
+                        childNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        visiting
+                ));
+            }
+
+            return entities;
+        } finally {
+            visiting.remove(nodeId);
+        }
+    }
+
+    private Set<String> collectScanfAddressingEntities(
+            TransactionContext tx,
+            String nodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, String> subscriptBaseCache,
+            Set<String> visiting
+    ) {
+        Set<String> entities = new LinkedHashSet<>();
+        if (nodeId == null || !visiting.add(nodeId)) {
+            return entities;
+        }
+
+        try {
+            NodeInfo nodeInfo = loadNodeInfo(tx, nodeId, nodeCache);
+            if (nodeInfo == null) {
+                return entities;
+            }
+
+            if (nodeInfo.labels().contains("Reference")) {
+                return entities;
+            }
+
+            if ((nodeInfo.labels().contains("UnaryOperator") || nodeInfo.labels().contains("UnaryOp"))
+                    && "&".equals(normalizedOperator(nodeInfo.operatorCode()))) {
+                List<String> children = loadAstChildren(tx, nodeId, astChildrenCache);
+                if (!children.isEmpty()) {
+                    return collectScanfAddressingEntities(
+                            tx,
+                            children.get(0),
+                            nodeCache,
+                            astChildrenCache,
+                            subscriptBaseCache,
+                            visiting
+                    );
+                }
+                return entities;
+            }
+
+            if (isSubscriptExpression(nodeInfo.labels())) {
+                List<String> children = loadAstChildren(tx, nodeId, astChildrenCache);
+                if (!children.isEmpty()) {
+                    entities.addAll(collectScanfAddressingEntities(
+                            tx,
+                            children.get(0),
+                            nodeCache,
+                            astChildrenCache,
+                            subscriptBaseCache,
+                            visiting
+                    ));
+                }
+                if (children.size() >= 2) {
+                    entities.addAll(collectReadEntities(
+                            tx,
+                            children.get(1),
+                            nodeCache,
+                            astChildrenCache,
+                            subscriptBaseCache,
+                            new LinkedHashSet<>()
+                    ));
+                }
+                return entities;
+            }
+
+            for (String childNodeId : loadAstChildren(tx, nodeId, astChildrenCache)) {
+                entities.addAll(collectScanfAddressingEntities(
                         tx,
                         childNodeId,
                         nodeCache,
@@ -1046,6 +1266,43 @@ public final class ReturnInfluenceAnalyzer {
         return baseNodeId;
     }
 
+    private CallInfo loadCallInfo(
+            TransactionContext tx,
+            String callNodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache
+    ) {
+        List<Record> records = tx.run(
+                CALL_INFO_QUERY,
+                Values.parameters("callNodeId", callNodeId)
+        ).list();
+        if (records.isEmpty()) {
+            return null;
+        }
+
+        Record record = records.get(0);
+        String calleeNodeId = getNullableString(record, "calleeNodeId");
+        if (calleeNodeId == null) {
+            return null;
+        }
+
+        NodeInfo calleeInfo = loadNodeInfo(tx, calleeNodeId, nodeCache);
+        String callName = resolveCallName(calleeInfo);
+        if (callName == null) {
+            return null;
+        }
+
+        List<String> argumentNodeIds = record.get("argumentNodeIds").isNull()
+                ? List.of()
+                : record.get("argumentNodeIds").asList(Value::asString);
+
+        if ("scanf".equals(callName) && !argumentNodeIds.isEmpty()) {
+            argumentNodeIds = new ArrayList<>(argumentNodeIds.subList(1, argumentNodeIds.size()));
+        }
+
+        return new CallInfo(callName, argumentNodeIds);
+    }
+
     private Set<String> transfer(Set<String> neededAfter, Set<String> defs, Set<String> uses) {
         Set<String> neededBefore = new LinkedHashSet<>(neededAfter);
         neededBefore.removeAll(defs);
@@ -1068,8 +1325,29 @@ public final class ReturnInfluenceAnalyzer {
                 || labels.contains("ArrayRef");
     }
 
+    private boolean isCallExpression(List<String> labels) {
+        return labels.contains("CallExpression") || labels.contains("FuncCall");
+    }
+
     private String normalizedOperator(String operatorCode) {
         return operatorCode == null || operatorCode.isBlank() ? "=" : operatorCode;
+    }
+
+    private String arraySummaryEntity(String entity) {
+        return entity.endsWith("[*]") ? entity : entity + "[*]";
+    }
+
+    private String resolveCallName(NodeInfo calleeInfo) {
+        if (calleeInfo == null) {
+            return null;
+        }
+
+        String rawName = firstNonBlank(calleeInfo.name(), calleeInfo.code());
+        if (rawName == null || rawName.isBlank()) {
+            return null;
+        }
+
+        return rawName.strip();
     }
 
     private String firstNonBlank(String... values) {
@@ -1099,6 +1377,12 @@ public final class ReturnInfluenceAnalyzer {
     private record AssignmentSides(
             String lhsNodeId,
             String rhsNodeId
+    ) {
+    }
+
+    private record CallInfo(
+            String callName,
+            List<String> argumentNodeIds
     ) {
     }
 
