@@ -74,9 +74,11 @@ public final class ReturnInfluenceAnalyzer {
     private static final String IF_DETAILS_QUERY = """
             MATCH (statement)
             WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:CONDITION]->(condition)
             OPTIONAL MATCH (statement)-[:THEN_STATEMENT]->(thenBranch)
             OPTIONAL MATCH (statement)-[:ELSE_STATEMENT]->(elseBranch)
             RETURN
+              elementId(condition) AS conditionNodeId,
               elementId(thenBranch) AS thenNodeId,
               labels(thenBranch) AS thenLabels,
               elementId(elseBranch) AS elseNodeId,
@@ -623,18 +625,32 @@ public final class ReturnInfluenceAnalyzer {
                 Values.parameters("statementNodeId", statementNodeId)
         ).single();
 
+        String conditionNodeId = getNullableString(record, "conditionNodeId");
+        Set<String> conditionUses = conditionNodeId == null
+                ? Set.of()
+                : collectReadEntities(
+                        tx,
+                        conditionNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                );
+
+        LinkedHashSet<String> thenMarked = new LinkedHashSet<>();
         Set<String> thenNeeded = analyzeOptionalStatement(
                 tx,
                 getNullableString(record, "thenNodeId"),
                 record.get("thenLabels"),
                 neededAfter,
-                markedNodeIds,
+                thenMarked,
                 nodeCache,
                 astChildrenCache,
                 assignmentSidesCache,
                 subscriptBaseCache
         );
 
+        LinkedHashSet<String> elseMarked = new LinkedHashSet<>();
         Set<String> elseNeeded = record.get("elseNodeId").isNull()
                 ? new LinkedHashSet<>(neededAfter)
                 : analyzeOptionalStatement(
@@ -642,7 +658,7 @@ public final class ReturnInfluenceAnalyzer {
                         getNullableString(record, "elseNodeId"),
                         record.get("elseLabels"),
                         neededAfter,
-                        markedNodeIds,
+                        elseMarked,
                         nodeCache,
                         astChildrenCache,
                         assignmentSidesCache,
@@ -651,6 +667,15 @@ public final class ReturnInfluenceAnalyzer {
 
         Set<String> result = new LinkedHashSet<>(thenNeeded);
         result.addAll(elseNeeded);
+        if (!thenMarked.isEmpty() || !elseMarked.isEmpty()) {
+            result.addAll(conditionUses);
+            if (conditionNodeId != null) {
+                markedNodeIds.add(conditionNodeId);
+            }
+        }
+
+        markedNodeIds.addAll(thenMarked);
+        markedNodeIds.addAll(elseMarked);
         return result;
     }
 
@@ -705,6 +730,9 @@ public final class ReturnInfluenceAnalyzer {
             newSeed.addAll(bodyNeeded);
             if (!passMarked.isEmpty()) {
                 newSeed.addAll(conditionUses);
+                if (conditionNodeId != null) {
+                    loopMarked.add(conditionNodeId);
+                }
             }
 
             loopMarked.addAll(passMarked);
@@ -766,6 +794,9 @@ public final class ReturnInfluenceAnalyzer {
             newSeed.addAll(bodyNeeded);
             if (!passMarked.isEmpty()) {
                 newSeed.addAll(conditionUses);
+                if (conditionNodeId != null) {
+                    loopMarked.add(conditionNodeId);
+                }
             }
 
             loopMarked.addAll(passMarked);
@@ -839,6 +870,9 @@ public final class ReturnInfluenceAnalyzer {
             newSeed.addAll(beforeBody);
             if (!passMarked.isEmpty()) {
                 newSeed.addAll(conditionUses);
+                if (conditionNodeId != null) {
+                    loopMarked.add(conditionNodeId);
+                }
             }
 
             loopMarked.addAll(passMarked);
