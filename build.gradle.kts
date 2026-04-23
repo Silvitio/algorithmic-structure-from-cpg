@@ -19,3 +19,11 @@ java {
 application {
     mainClass.set("app.Main")
 }
+
+tasks.register<JavaExec>("runTestRunner") {
+    group = "application"
+    description = "Runs the interactive analysis test runner"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("app.AnalysisTestRunner")
+    standardInput = System.`in`
+}

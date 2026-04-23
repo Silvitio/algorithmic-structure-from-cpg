@@ -1,0 +1,6 @@
+sum = 0
+i = 0
+sum = sum + i;
+i++;
+i < 5
+printf("%d\n", sum);

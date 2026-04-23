@@ -1,0 +1,6 @@
+a = 1
+b = 2
+a < b
+res = a + 10;
+res = b + 20;
+printf("%d\n", res);
