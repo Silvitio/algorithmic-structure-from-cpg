@@ -1,10 +1,7 @@
 package app;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.PrintWriter;
-import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -23,8 +20,6 @@ public final class AnalysisTestRunner {
     private static final Path REPORT_PATH = Path.of("docs", "analysis_test_runner_report.txt");
     private static final String SOURCE_FILE_NAME = "source.c";
     private static final String EXPECTED_FILE_NAME = "expected.txt";
-    private static final String LOADER_PATH =
-            "C:\\MyData\\Projects\\cpg-10.8.2\\cpg-neo4j\\build\\install\\cpg-neo4j\\bin\\cpg-neo4j.bat";
 
     public static void main(String[] args) throws Exception {
         new AnalysisTestRunner().runInteractive();
@@ -137,7 +132,8 @@ public final class AnalysisTestRunner {
         List<String> expectedLines = Files.readAllLines(testCase.expectedPath());
         String sourceCode = Files.readString(testCase.sourcePath());
 
-        runLoader(testCase.sourcePath());
+        CpgLoaderService cpgLoaderService = new CpgLoaderService();
+        cpgLoaderService.load(testCase.sourcePath());
 
         AnalysisService analysisService = new AnalysisService();
         List<String> actualLines = analysisService.collectMarkedCodes();
@@ -163,39 +159,6 @@ public final class AnalysisTestRunner {
                 unexpected,
                 passed
         );
-    }
-
-    private void runLoader(Path sourcePath) throws Exception {
-        List<String> command = List.of(
-                "cmd.exe",
-                "/c",
-                LOADER_PATH,
-                "--host=localhost",
-                "--port=17687",
-                "--user=" + AnalysisService.USER,
-                "--password=" + AnalysisService.PASSWORD,
-                sourcePath.toAbsolutePath().toString()
-        );
-
-        ProcessBuilder processBuilder = new ProcessBuilder(command);
-        processBuilder.directory(Path.of("").toAbsolutePath().toFile());
-        processBuilder.redirectErrorStream(true);
-
-        Process process = processBuilder.start();
-        String output;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), Charset.defaultCharset()))
-        ) {
-            output = reader.lines().collect(Collectors.joining(System.lineSeparator()));
-        }
-
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new IllegalStateException(
-                    "Loading code into Neo4j failed with exit code "
-                            + exitCode + System.lineSeparator() + output
-            );
-        }
     }
 
     private LinkedHashSet<String> normalizeToSet(Collection<String> lines) {
