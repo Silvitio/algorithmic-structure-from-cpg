@@ -1,0 +1,8 @@
+a = 5
+b = 2
+out = 0
+a > 0
+b > 0
+out = a + b;
+out = a;
+printf("%d\n", out);

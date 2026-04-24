@@ -1,0 +1,9 @@
+x = 0
+sum = 0
+i = 0
+scanf("%d", &x);
+x > 0
+i < x
+sum = sum + i;
+i++;
+printf("%d\n", sum);

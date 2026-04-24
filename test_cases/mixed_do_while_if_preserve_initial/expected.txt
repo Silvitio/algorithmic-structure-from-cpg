@@ -1,0 +1,6 @@
+x = 3
+result = 10
+x == 2
+result = result + x;
+x--;
+x > 0

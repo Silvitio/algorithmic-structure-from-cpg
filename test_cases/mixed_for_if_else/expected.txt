@@ -1,0 +1,7 @@
+sum = 0
+i = 0
+i < 6
+i++
+i % 2 == 0
+sum = sum + i;
+sum = sum - 1;

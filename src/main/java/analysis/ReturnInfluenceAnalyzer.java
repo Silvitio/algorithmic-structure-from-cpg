@@ -15,6 +15,8 @@ import java.util.Map;
 import java.util.Set;
 
 public final class ReturnInfluenceAnalyzer {
+    private final Set<String> significantEntities = new LinkedHashSet<>();
+
     private static final String CLEAR_INFLUENCE_QUERY = """
             MATCH (n:INFLUENCES_RETURN)
             REMOVE n:INFLUENCES_RETURN
@@ -25,13 +27,10 @@ public final class ReturnInfluenceAnalyzer {
             """;
     private static final String FUNCTION_QUERY = """
             MATCH (f:FunctionDeclaration)-[:BODY]->(body:Block)
-            OPTIONAL MATCH (body)-[:AST*0..]->(ret:ReturnStatement)
-            WITH f, body, collect(DISTINCT elementId(ret)) AS returnNodeIds
             RETURN
               elementId(f) AS functionNodeId,
               coalesce(f.name, f.code, "<unnamed-function>") AS functionName,
-              elementId(body) AS bodyNodeId,
-              returnNodeIds
+              elementId(body) AS bodyNodeId
             ORDER BY functionName, functionNodeId
             """;
     private static final String RETURN_VALUE_QUERY = """
@@ -170,36 +169,13 @@ public final class ReturnInfluenceAnalyzer {
             int totalMarked = 0;
 
             for (Record functionRecord : functionRecords) {
+                significantEntities.clear();
+
                 String functionNodeId = functionRecord.get("functionNodeId").asString();
                 String functionName = functionRecord.get("functionName").asString();
                 String bodyNodeId = functionRecord.get("bodyNodeId").asString();
-                List<String> returnNodeIds = functionRecord.get("returnNodeIds").asList(Value::asString);
-
-                if (returnNodeIds.size() > 1) {
-                    functions.add(new FunctionInfluence(functionName, functionNodeId, 0, List.of(), false));
-                    continue;
-                }
 
                 Set<String> neededEntities = new LinkedHashSet<>();
-                if (returnNodeIds.size() == 1) {
-                    String returnNodeId = returnNodeIds.get(0);
-                    Record returnValueRecord = tx.run(
-                            RETURN_VALUE_QUERY,
-                            Values.parameters("returnNodeId", returnNodeId)
-                    ).single();
-                    String returnValueNodeId = getNullableString(returnValueRecord, "returnValueNodeId");
-                    if (returnValueNodeId != null) {
-                        neededEntities.addAll(collectReadEntities(
-                                tx,
-                                returnValueNodeId,
-                                nodeCache,
-                                astChildrenCache,
-                                subscriptBaseCache,
-                                new LinkedHashSet<>()
-                        ));
-                    }
-                }
-
                 LinkedHashSet<String> markedNodeIds = new LinkedHashSet<>();
                 analyzeBlock(
                         tx,
@@ -304,6 +280,17 @@ public final class ReturnInfluenceAnalyzer {
                     statementNodeId,
                     neededAfter,
                     markedNodeIds,
+                    nodeCache,
+                    astChildrenCache,
+                    subscriptBaseCache
+            );
+        }
+
+        if (labels.contains("ReturnStatement")) {
+            return analyzeReturnStatement(
+                    tx,
+                    statementNodeId,
+                    neededAfter,
                     nodeCache,
                     astChildrenCache,
                     subscriptBaseCache
@@ -430,6 +417,7 @@ public final class ReturnInfluenceAnalyzer {
             }
 
             markedNodeIds.add(statementNodeId);
+            rememberSignificantEntities(Set.of(), uses);
             Set<String> neededBefore = new LinkedHashSet<>(neededAfter);
             neededBefore.addAll(uses);
             return neededBefore;
@@ -458,6 +446,7 @@ public final class ReturnInfluenceAnalyzer {
             }
 
             markedNodeIds.add(statementNodeId);
+            rememberSignificantEntities(defs, uses);
             return transfer(neededAfter, defs, uses);
         }
 
@@ -484,7 +473,16 @@ public final class ReturnInfluenceAnalyzer {
             String declarationNodeId = declarationRecord.get("declarationNodeId").asString();
             String declarationName = getNullableString(declarationRecord, "declarationName");
             String initializerNodeId = getNullableString(declarationRecord, "initializerNodeId");
-            if (declarationName == null || declarationName.isBlank() || initializerNodeId == null) {
+            if (declarationName == null || declarationName.isBlank()) {
+                continue;
+            }
+
+            Set<String> declarationEntities = declarationEntities(declarationName);
+            if (initializerNodeId == null) {
+                if (intersects(significantEntities, declarationEntities)) {
+                    markedNodeIds.add(declarationNodeId);
+                    rememberSignificantEntities(declarationEntities, Set.of());
+                }
                 continue;
             }
 
@@ -498,13 +496,50 @@ public final class ReturnInfluenceAnalyzer {
                     new LinkedHashSet<>()
             );
 
-            if (intersects(needed, defs)) {
+            boolean initializerIsNeeded = intersects(needed, defs);
+            boolean declarationIsSignificant = intersects(significantEntities, declarationEntities);
+            if (initializerIsNeeded || declarationIsSignificant) {
                 markedNodeIds.add(declarationNodeId);
-                needed = transfer(needed, defs, uses);
+                rememberSignificantEntities(declarationEntities, initializerIsNeeded ? uses : Set.of());
+                if (initializerIsNeeded) {
+                    needed = transfer(needed, defs, uses);
+                }
             }
         }
 
         return needed;
+    }
+
+    private Set<String> analyzeReturnStatement(
+            TransactionContext tx,
+            String statementNodeId,
+            Set<String> neededAfter,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, String> subscriptBaseCache
+    ) {
+        Record returnValueRecord = tx.run(
+                RETURN_VALUE_QUERY,
+                Values.parameters("returnNodeId", statementNodeId)
+        ).single();
+        String returnValueNodeId = getNullableString(returnValueRecord, "returnValueNodeId");
+        if (returnValueNodeId == null) {
+            return new LinkedHashSet<>(neededAfter);
+        }
+
+        Set<String> uses = collectReadEntities(
+                tx,
+                returnValueNodeId,
+                nodeCache,
+                astChildrenCache,
+                subscriptBaseCache,
+                new LinkedHashSet<>()
+        );
+        rememberSignificantEntities(Set.of(), uses);
+
+        Set<String> neededBefore = new LinkedHashSet<>(neededAfter);
+        neededBefore.addAll(uses);
+        return neededBefore;
     }
 
     private Set<String> analyzeAssignment(
@@ -555,6 +590,7 @@ public final class ReturnInfluenceAnalyzer {
 
         if (intersects(neededAfter, defs)) {
             markedNodeIds.add(statementNodeId);
+            rememberSignificantEntities(defs, uses);
             return transfer(neededAfter, defs, uses);
         }
 
@@ -604,6 +640,7 @@ public final class ReturnInfluenceAnalyzer {
 
         if (intersects(neededAfter, defs)) {
             markedNodeIds.add(statementNodeId);
+            rememberSignificantEntities(defs, uses);
             return transfer(neededAfter, defs, uses);
         }
 
@@ -672,6 +709,7 @@ public final class ReturnInfluenceAnalyzer {
             if (conditionNodeId != null) {
                 markedNodeIds.add(conditionNodeId);
             }
+            rememberSignificantEntities(Set.of(), conditionUses);
         }
 
         markedNodeIds.addAll(thenMarked);
@@ -733,6 +771,7 @@ public final class ReturnInfluenceAnalyzer {
                 if (conditionNodeId != null) {
                     loopMarked.add(conditionNodeId);
                 }
+                rememberSignificantEntities(Set.of(), conditionUses);
             }
 
             loopMarked.addAll(passMarked);
@@ -797,6 +836,7 @@ public final class ReturnInfluenceAnalyzer {
                 if (conditionNodeId != null) {
                     loopMarked.add(conditionNodeId);
                 }
+                rememberSignificantEntities(Set.of(), conditionUses);
             }
 
             loopMarked.addAll(passMarked);
@@ -873,6 +913,7 @@ public final class ReturnInfluenceAnalyzer {
                 if (conditionNodeId != null) {
                     loopMarked.add(conditionNodeId);
                 }
+                rememberSignificantEntities(Set.of(), conditionUses);
             }
 
             loopMarked.addAll(passMarked);
@@ -1369,6 +1410,22 @@ public final class ReturnInfluenceAnalyzer {
 
     private String arraySummaryEntity(String entity) {
         return entity.endsWith("[*]") ? entity : entity + "[*]";
+    }
+
+    private Set<String> declarationEntities(String declarationName) {
+        if (declarationName == null || declarationName.isBlank()) {
+            return Set.of();
+        }
+
+        Set<String> entities = new LinkedHashSet<>();
+        entities.add(declarationName);
+        entities.add(arraySummaryEntity(declarationName));
+        return entities;
+    }
+
+    private void rememberSignificantEntities(Set<String> defs, Set<String> uses) {
+        significantEntities.addAll(defs);
+        significantEntities.addAll(uses);
     }
 
     private String resolveCallName(NodeInfo calleeInfo) {

@@ -8,8 +8,12 @@ int main() {
         sum = sum + arr[i];
     }
 
-    printf("%d", sum);
-    return 0;
+    sum = sum;
+
+    return sum;
+
+    int func = 94;
+    sum = func;
 }
 
 

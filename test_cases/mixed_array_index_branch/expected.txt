@@ -1,0 +1,9 @@
+arr[4] = {1, 2, 3, 4}
+index = 0
+value = 0
+out = 0
+scanf("%d %d", &index, &value);
+arr[index] = value;
+arr[2] > 2
+out = arr[index];
+out = arr[0];

@@ -1,0 +1,7 @@
+x = 1
+y = 2
+out = 0
+x > 0
+out = y + 10;
+out = y - 10;
+printf("%d\n", out);

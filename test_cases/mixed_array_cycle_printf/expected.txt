@@ -1,0 +1,11 @@
+arr[5] = {1, 2, 3, 4, 5}
+index = 0
+value = 0
+sum = 0
+i = 0
+scanf("%d %d", &index, &value);
+arr[index] = value;
+i < 5
+sum = sum + arr[i];
+i++;
+printf("%d\n", sum);
