@@ -5,7 +5,21 @@ import java.util.List;
 import java.util.Scanner;
 
 public class Main {
+    private static final String DEFS_USES_DEBUG_FLAG = "--defs-uses-debug";
+
     public static void main(String[] args) throws Exception {
+        if (isDefsUsesDebugMode(args)) {
+            Path sourcePath = resolveDebugSourcePath(args);
+            CpgLoaderService cpgLoaderService = new CpgLoaderService();
+            cpgLoaderService.load(sourcePath);
+
+            DefsUsesDebugService defsUsesDebugService = new DefsUsesDebugService();
+            for (String line : defsUsesDebugService.collectDebugLines()) {
+                System.out.println(line);
+            }
+            return;
+        }
+
         Path sourcePath = resolveSourcePath(args);
 
         CpgLoaderService cpgLoaderService = new CpgLoaderService();
@@ -31,5 +45,16 @@ public class Main {
                 return Path.of(input);
             }
         }
+    }
+
+    private static boolean isDefsUsesDebugMode(String[] args) {
+        return args.length > 0 && DEFS_USES_DEBUG_FLAG.equals(args[0]);
+    }
+
+    private static Path resolveDebugSourcePath(String[] args) {
+        if (args.length > 1 && !args[1].isBlank()) {
+            return Path.of(args[1].trim());
+        }
+        return resolveSourcePath(new String[0]);
     }
 }
