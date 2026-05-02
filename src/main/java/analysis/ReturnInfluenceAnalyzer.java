@@ -505,7 +505,7 @@ public final class ReturnInfluenceAnalyzer {
                 continue;
             }
 
-            Set<String> declarationEntities = declarationEntities(declarationName);
+            Set<String> declarationEntities = declarationEntities(tx, declarationNodeId, declarationName);
             if (initializerNodeId == null) {
                 if (intersects(significantEntities, declarationEntities)) {
                     markedNodeIds.add(declarationNodeId);
@@ -604,6 +604,13 @@ public final class ReturnInfluenceAnalyzer {
                 subscriptBaseCache,
                 new LinkedHashSet<>()
         );
+        uses.addAll(collectWriteTargetUses(
+                tx,
+                sides.lhsNodeId(),
+                nodeCache,
+                astChildrenCache,
+                subscriptBaseCache
+        ));
 
         if (!"=".equals(operator)) {
             uses.addAll(collectReadEntities(
@@ -1327,8 +1334,18 @@ public final class ReturnInfluenceAnalyzer {
         return defsUsesExtractor.arraySummaryEntityName(entity);
     }
 
-    private Set<String> declarationEntities(String declarationName) {
-        return toEntityNames(defsUsesExtractor.declarationEntities(declarationName));
+    private Set<String> declarationEntities(TransactionContext tx, String declarationNodeId, String declarationName) {
+        return toEntityNames(defsUsesExtractor.declarationEntities(tx, declarationNodeId, declarationName, extractionState));
+    }
+
+    private Set<String> collectWriteTargetUses(
+            TransactionContext tx,
+            String nodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, String> subscriptBaseCache
+    ) {
+        return toEntityNames(defsUsesExtractor.collectWriteTargetUses(tx, nodeId, extractionState));
     }
 
     private void rememberSignificantEntities(Set<String> defs, Set<String> uses) {

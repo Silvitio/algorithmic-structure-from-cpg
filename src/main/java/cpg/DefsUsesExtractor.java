@@ -78,6 +78,17 @@ public final class DefsUsesExtractor {
         );
     }
 
+    public Set<Entity> collectWriteTargetUses(TransactionContext tx, String nodeId, ExtractionState state) {
+        return collectWriteTargetUses(
+                tx,
+                nodeId,
+                state.nodeCache(),
+                state.astChildrenCache(),
+                state.subscriptBaseCache(),
+                new LinkedHashSet<>()
+        );
+    }
+
     public Set<Entity> collectArraySummaryEntities(TransactionContext tx, String nodeId, ExtractionState state) {
         return collectArraySummaryEntities(
                 tx,
@@ -89,14 +100,21 @@ public final class DefsUsesExtractor {
         );
     }
 
-    public Set<Entity> declarationEntities(String declarationName) {
+    public Set<Entity> declarationEntities(
+            TransactionContext tx,
+            String declarationNodeId,
+            String declarationName,
+            ExtractionState state
+    ) {
         if (declarationName == null || declarationName.isBlank()) {
             return Set.of();
         }
 
         Set<Entity> entities = new LinkedHashSet<>();
         entities.add(Entity.variable(declarationName));
-        entities.add(Entity.arraySummary(arraySummaryEntityName(declarationName)));
+        if (isArrayDeclaration(tx, declarationNodeId, state)) {
+            entities.add(Entity.arraySummary(arraySummaryEntityName(declarationName)));
+        }
         return entities;
     }
 
@@ -380,6 +398,71 @@ public final class DefsUsesExtractor {
         }
     }
 
+    private Set<Entity> collectWriteTargetUses(
+            TransactionContext tx,
+            String nodeId,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, String> subscriptBaseCache,
+            Set<String> visiting
+    ) {
+        Set<Entity> entities = new LinkedHashSet<>();
+        if (nodeId == null || !visiting.add(nodeId)) {
+            return entities;
+        }
+
+        try {
+            NodeInfo nodeInfo = loadNodeInfo(tx, nodeId, nodeCache);
+            if (nodeInfo == null) {
+                return entities;
+            }
+
+            if (nodeInfo.labels().contains("Reference")) {
+                return entities;
+            }
+
+            if (isSubscriptExpression(nodeInfo.labels())) {
+                List<String> children = loadAstChildren(tx, nodeId, astChildrenCache);
+                if (children.size() >= 2) {
+                    entities.addAll(collectReadEntities(
+                            tx,
+                            children.get(1),
+                            nodeCache,
+                            astChildrenCache,
+                            subscriptBaseCache,
+                            new LinkedHashSet<>()
+                    ));
+                }
+                if (!children.isEmpty()) {
+                    entities.addAll(collectWriteTargetUses(
+                            tx,
+                            children.get(0),
+                            nodeCache,
+                            astChildrenCache,
+                            subscriptBaseCache,
+                            visiting
+                    ));
+                }
+                return entities;
+            }
+
+            for (String childNodeId : loadAstChildren(tx, nodeId, astChildrenCache)) {
+                entities.addAll(collectWriteTargetUses(
+                        tx,
+                        childNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        visiting
+                ));
+            }
+
+            return entities;
+        } finally {
+            visiting.remove(nodeId);
+        }
+    }
+
     private NodeInfo loadNodeInfo(
             TransactionContext tx,
             String nodeId,
@@ -452,6 +535,24 @@ public final class DefsUsesExtractor {
         return labels.contains("SubscriptExpression")
                 || labels.contains("ArraySubscriptExpression")
                 || labels.contains("ArraySubscriptionExpression");
+    }
+
+    private boolean isArrayDeclaration(
+            TransactionContext tx,
+            String declarationNodeId,
+            ExtractionState state
+    ) {
+        if (declarationNodeId == null) {
+            return false;
+        }
+
+        NodeInfo nodeInfo = loadNodeInfo(tx, declarationNodeId, state.nodeCache());
+        if (nodeInfo == null) {
+            return false;
+        }
+
+        String code = firstNonBlank(nodeInfo.code(), nodeInfo.name());
+        return code != null && code.contains("[") && code.contains("]");
     }
 
     private String normalizedOperator(String operatorCode) {

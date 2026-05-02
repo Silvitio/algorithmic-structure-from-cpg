@@ -165,8 +165,9 @@ public final class DefsUsesDebugService {
 
         List<Record> declarations = tx.run(DECLARATIONS_QUERY, Values.parameters("statementNodeId", nodeId)).list();
         for (Record declaration : declarations) {
+            String declarationNodeId = getNullableString(declaration, "declarationNodeId");
             String declarationName = getNullableString(declaration, "declarationName");
-            defs.addAll(defsUsesExtractor.declarationEntities(declarationName));
+            defs.addAll(defsUsesExtractor.declarationEntities(tx, declarationNodeId, declarationName, state));
 
             String initializerNodeId = getNullableString(declaration, "initializerNodeId");
             uses.addAll(defsUsesExtractor.collectReadEntities(tx, initializerNodeId, state));
@@ -188,6 +189,7 @@ public final class DefsUsesDebugService {
 
         Set<Entity> defs = defsUsesExtractor.collectWrittenEntities(tx, lhsNodeId, state);
         Set<Entity> uses = new LinkedHashSet<>(defsUsesExtractor.collectReadEntities(tx, rhsNodeId, state));
+        uses.addAll(defsUsesExtractor.collectWriteTargetUses(tx, lhsNodeId, state));
         return new DebugEntry("ASSIGNMENT", startLine, code, defs, uses);
     }
 
