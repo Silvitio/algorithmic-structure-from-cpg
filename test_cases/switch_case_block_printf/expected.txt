@@ -1,0 +1,8 @@
+selector = 2
+x = 10
+y = 20
+selector
+case 1:
+default:
+printf("%d\n", x);
+printf("%d\n", y);

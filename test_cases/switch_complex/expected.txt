@@ -1,0 +1,9 @@
+selector = 2
+x = 10
+y = 20
+result = 0
+selector
+case 1:
+default:
+result = x + y;
+result = x;

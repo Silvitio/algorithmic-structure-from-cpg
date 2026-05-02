@@ -1,0 +1,8 @@
+selector = 3
+a = 5
+b = 7
+c = 9
+selector
+default:
+case 1:
+case 2:

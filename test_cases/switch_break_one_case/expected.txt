@@ -1,0 +1,5 @@
+selector = 1
+y = 20
+selector
+case 1:
+y++

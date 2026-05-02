@@ -1,21 +1,26 @@
-﻿ #include "stdio.h"
+﻿#include "stdio.h"
 
 int main() {
-    int sum;
-    int arr[5] = {0, 1, 2, 3, 4};
+    int selector = 2;
+    int x = 10;
+    int y = 20;
+    int result = 0;
 
-    for (int i = 0; i < 0; i++) {
-        sum = sum + arr[i];
+    switch (selector) {
+    case 1:
+        result = x;
+        break;
+
+    case 2: {
+        result = y + 1;
+        printf("%d\n", result);
+        break;
     }
 
-    sum = sum;
+    default:
+        result = x + y;
+        return result;
+    }
 
-    return sum;
-
-    int func = 94;
-    sum = func;
+    return result;
 }
-
-
-
-

@@ -109,6 +109,16 @@ public final class ReturnInfluenceAnalyzer {
               elementId(iteration) AS iterationNodeId,
               labels(iteration) AS iterationLabels
             """;
+    private static final String SWITCH_DETAILS_QUERY = """
+            MATCH (statement)
+            WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:SELECTOR]->(selector)
+            OPTIONAL MATCH (statement)-[:STATEMENT]->(body)
+            RETURN
+              elementId(selector) AS selectorNodeId,
+              elementId(body) AS bodyNodeId,
+              labels(body) AS bodyLabels
+            """;
     private static final String NODE_QUERY = """
             MATCH (node)
             WHERE elementId(node) = $nodeId
@@ -336,6 +346,19 @@ public final class ReturnInfluenceAnalyzer {
 
         if (labels.contains("IfStatement")) {
             return analyzeIfStatement(
+                    tx,
+                    statementNodeId,
+                    neededAfter,
+                    markedNodeIds,
+                    nodeCache,
+                    astChildrenCache,
+                    assignmentSidesCache,
+                    subscriptBaseCache
+            );
+        }
+
+        if (labels.contains("SwitchStatement")) {
+            return analyzeSwitchStatement(
                     tx,
                     statementNodeId,
                     neededAfter,
@@ -714,6 +737,98 @@ public final class ReturnInfluenceAnalyzer {
 
         markedNodeIds.addAll(thenMarked);
         markedNodeIds.addAll(elseMarked);
+        return result;
+    }
+
+    private Set<String> analyzeSwitchStatement(
+            TransactionContext tx,
+            String statementNodeId,
+            Set<String> neededAfter,
+            LinkedHashSet<String> markedNodeIds,
+            Map<String, NodeInfo> nodeCache,
+            Map<String, List<String>> astChildrenCache,
+            Map<String, AssignmentSides> assignmentSidesCache,
+            Map<String, String> subscriptBaseCache
+    ) {
+        Record record = tx.run(
+                SWITCH_DETAILS_QUERY,
+                Values.parameters("statementNodeId", statementNodeId)
+        ).single();
+
+        String selectorNodeId = getNullableString(record, "selectorNodeId");
+        Set<String> selectorUses = selectorNodeId == null
+                ? Set.of()
+                : collectReadEntities(
+                        tx,
+                        selectorNodeId,
+                        nodeCache,
+                        astChildrenCache,
+                        subscriptBaseCache,
+                        new LinkedHashSet<>()
+                );
+
+        String bodyNodeId = getNullableString(record, "bodyNodeId");
+        if (bodyNodeId == null) {
+            return new LinkedHashSet<>(neededAfter);
+        }
+
+        List<Record> statementRecords = tx.run(
+                BLOCK_STATEMENTS_QUERY,
+                Values.parameters("blockNodeId", bodyNodeId)
+        ).list();
+
+        List<SwitchBranch> branches = splitSwitchBranches(statementRecords);
+        if (branches.isEmpty()) {
+            return new LinkedHashSet<>(neededAfter);
+        }
+        boolean hasAnyCaseBranch = branches.stream().anyMatch(SwitchBranch::caseBranch);
+
+        Set<String> result = new LinkedHashSet<>();
+        LinkedHashSet<String> branchMarked = new LinkedHashSet<>();
+        LinkedHashSet<String> branchMarkerNodeIds = new LinkedHashSet<>();
+        boolean hasSignificantCaseBranch = false;
+
+        for (SwitchBranch branch : branches) {
+            LinkedHashSet<String> localMarked = new LinkedHashSet<>();
+            Set<String> branchNeeded = new LinkedHashSet<>(neededAfter);
+
+            for (int index = branch.statementRecords().size() - 1; index >= 0; index--) {
+                Record statementRecord = branch.statementRecords().get(index);
+                branchNeeded = analyzeStatement(
+                        tx,
+                        statementRecord.get("statementNodeId").asString(),
+                        statementRecord.get("labels").asList(Value::asString),
+                        branchNeeded,
+                        localMarked,
+                        nodeCache,
+                        astChildrenCache,
+                        assignmentSidesCache,
+                        subscriptBaseCache
+                );
+            }
+
+            result.addAll(branchNeeded);
+            if (!localMarked.isEmpty() || !branchNeeded.equals(neededAfter)) {
+                if (hasAnyCaseBranch) {
+                    branchMarkerNodeIds.add(branch.markerNodeId());
+                }
+                branchMarked.addAll(localMarked);
+                if (branch.caseBranch()) {
+                    hasSignificantCaseBranch = true;
+                }
+            }
+        }
+
+        markedNodeIds.addAll(branchMarked);
+        markedNodeIds.addAll(branchMarkerNodeIds);
+        if (hasSignificantCaseBranch) {
+            result.addAll(selectorUses);
+            if (selectorNodeId != null) {
+                markedNodeIds.add(selectorNodeId);
+            }
+            rememberSignificantEntities(Set.of(), selectorUses);
+        }
+
         return result;
     }
 
@@ -1404,6 +1519,35 @@ public final class ReturnInfluenceAnalyzer {
         return labels.contains("CallExpression") || labels.contains("FuncCall");
     }
 
+    private List<SwitchBranch> splitSwitchBranches(List<Record> statementRecords) {
+        List<SwitchBranch> branches = new ArrayList<>();
+        SwitchBranch current = null;
+
+        for (Record statementRecord : statementRecords) {
+            String statementNodeId = statementRecord.get("statementNodeId").asString();
+            List<String> labels = statementRecord.get("labels").asList(Value::asString);
+            if (isSwitchBranchMarker(labels)) {
+                current = new SwitchBranch(
+                        statementNodeId,
+                        labels.contains("CaseStatement"),
+                        new ArrayList<>()
+                );
+                branches.add(current);
+                continue;
+            }
+
+            if (current != null) {
+                current.statementRecords().add(statementRecord);
+            }
+        }
+
+        return branches;
+    }
+
+    private boolean isSwitchBranchMarker(List<String> labels) {
+        return labels.contains("CaseStatement") || labels.contains("DefaultStatement");
+    }
+
     private String normalizedOperator(String operatorCode) {
         return operatorCode == null || operatorCode.isBlank() ? "=" : operatorCode;
     }
@@ -1474,6 +1618,13 @@ public final class ReturnInfluenceAnalyzer {
     private record CallInfo(
             String callName,
             List<String> argumentNodeIds
+    ) {
+    }
+
+    private record SwitchBranch(
+            String markerNodeId,
+            boolean caseBranch,
+            List<Record> statementRecords
     ) {
     }
 
