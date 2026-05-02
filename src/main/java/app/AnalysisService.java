@@ -3,6 +3,7 @@ package app;
 import analysis.ReturnInfluenceAnalyzer;
 import analysis.ReturnInfluenceAnalyzer.AnalysisSummary;
 import analysis.ReturnInfluenceAnalyzer.FunctionInfluence;
+import analysis.StructuralSignificanceAnalyzer;
 import cpg.AlgoGraphBuilder;
 
 import org.neo4j.driver.AuthTokens;
@@ -30,6 +31,9 @@ public final class AnalysisService {
     public List<String> collectMarkedCodes(Session session) {
         ReturnInfluenceAnalyzer returnInfluenceAnalyzer = new ReturnInfluenceAnalyzer();
         AnalysisSummary analysisSummary = returnInfluenceAnalyzer.analyze(session);
+
+        StructuralSignificanceAnalyzer structuralSignificanceAnalyzer = new StructuralSignificanceAnalyzer();
+        structuralSignificanceAnalyzer.markStructuralNodes(session);
 
         AlgoGraphBuilder algoGraphBuilder = new AlgoGraphBuilder();
         algoGraphBuilder.rebuild(session);

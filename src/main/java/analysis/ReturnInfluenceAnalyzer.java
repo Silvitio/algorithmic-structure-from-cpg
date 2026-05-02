@@ -785,7 +785,6 @@ public final class ReturnInfluenceAnalyzer {
 
         Set<String> result = new LinkedHashSet<>();
         LinkedHashSet<String> branchMarked = new LinkedHashSet<>();
-        LinkedHashSet<String> branchMarkerNodeIds = new LinkedHashSet<>();
         boolean hasSignificantCaseBranch = false;
 
         for (SwitchBranch branch : branches) {
@@ -809,9 +808,6 @@ public final class ReturnInfluenceAnalyzer {
 
             result.addAll(branchNeeded);
             if (!localMarked.isEmpty() || !branchNeeded.equals(neededAfter)) {
-                if (hasAnyCaseBranch) {
-                    branchMarkerNodeIds.add(branch.markerNodeId());
-                }
                 branchMarked.addAll(localMarked);
                 if (branch.caseBranch()) {
                     hasSignificantCaseBranch = true;
@@ -820,7 +816,6 @@ public final class ReturnInfluenceAnalyzer {
         }
 
         markedNodeIds.addAll(branchMarked);
-        markedNodeIds.addAll(branchMarkerNodeIds);
         if (hasSignificantCaseBranch) {
             result.addAll(selectorUses);
             if (selectorNodeId != null) {

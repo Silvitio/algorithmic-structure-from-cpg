@@ -1,8 +1,4 @@
 selector = 1
-x = 10
 y = 20
 selector
-case 1:
 y++
-case 2:
-x++

@@ -1,3 +1,2 @@
 result = 10
-default:
 printf("%d\n", result);

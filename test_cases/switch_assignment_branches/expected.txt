@@ -3,7 +3,5 @@ x = 10
 y = 20
 result = 0
 selector
-case 2:
-default:
 result = y + 1;
 result = x + y;

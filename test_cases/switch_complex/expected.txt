@@ -2,5 +2,4 @@ selector = 2
 x = 10
 result = 0
 selector
-case 1:
 result = x;
