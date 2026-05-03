@@ -4,3 +4,4 @@ y = 20
 selector
 printf("%d\n", x);
 printf("%d\n", y);
+break

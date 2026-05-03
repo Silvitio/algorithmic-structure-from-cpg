@@ -122,13 +122,32 @@ public final class ModelReturnInfluenceAnalyzer {
 
             for (Map.Entry<String, IfStructure> entry : model.ifStructures().entrySet()) {
                 IfStructure structure = entry.getValue();
-                if (regionContainsSignificantModelNode(structure.thenRegion(), significantModelNodeIds)
-                        || regionContainsSignificantModelNode(structure.elseRegion(), significantModelNodeIds)) {
+                boolean thenSignificant = regionContainsSignificantModelNode(structure.thenRegion(), significantModelNodeIds);
+                boolean elseSignificant = regionContainsSignificantModelNode(structure.elseRegion(), significantModelNodeIds);
+                if (thenSignificant || elseSignificant) {
                     if (significantModelNodeIds.add(entry.getKey())) {
                         changed = true;
                     }
                     if (structure.conditionNodeId() != null && significantOutputIds.add(structure.conditionNodeId())) {
                         changed = true;
+                    }
+                    if (thenSignificant) {
+                        changed |= addBreakNodesRecursively(
+                                model,
+                                structure.thenRegion(),
+                                significantModelNodeIds,
+                                significantOutputIds,
+                                new LinkedHashSet<>()
+                        );
+                    }
+                    if (elseSignificant) {
+                        changed |= addBreakNodesRecursively(
+                                model,
+                                structure.elseRegion(),
+                                significantModelNodeIds,
+                                significantOutputIds,
+                                new LinkedHashSet<>()
+                        );
                     }
                 }
             }
@@ -178,6 +197,16 @@ public final class ModelReturnInfluenceAnalyzer {
                         changed = true;
                     }
                 }
+
+                if (loopBodySignificant) {
+                    changed |= addBreakNodesRecursively(
+                            model,
+                            structure.bodyRegion(),
+                            significantModelNodeIds,
+                            significantOutputIds,
+                            new LinkedHashSet<>()
+                    );
+                }
             }
 
             for (Map.Entry<String, SwitchStructure> entry : model.switchStructures().entrySet()) {
@@ -195,6 +224,17 @@ public final class ModelReturnInfluenceAnalyzer {
                     }
                     if (structure.selectorNodeId() != null && significantOutputIds.add(structure.selectorNodeId())) {
                         changed = true;
+                    }
+                    for (BranchArm arm : structure.arms()) {
+                        if (regionContainsSignificantModelNode(arm.body(), significantModelNodeIds)) {
+                            changed |= addBreakNodesRecursively(
+                                    model,
+                                    arm.body(),
+                                    significantModelNodeIds,
+                                    significantOutputIds,
+                                    new LinkedHashSet<>()
+                            );
+                        }
                     }
                 }
             }
@@ -351,6 +391,115 @@ public final class ModelReturnInfluenceAnalyzer {
         return changed;
     }
 
+    private boolean addBreakNodesRecursively(
+            FunctionModel model,
+            Region region,
+            Set<String> significantModelNodeIds,
+            Set<String> significantOutputIds,
+            Set<String> visitedRegionNodeIds
+    ) {
+        boolean changed = false;
+        for (String nodeId : region.nodeIds()) {
+            if (!visitedRegionNodeIds.add(nodeId)) {
+                continue;
+            }
+
+            ProgramNode node = model.findByCpgNodeId(nodeId).orElse(null);
+            if (node != null && isBreakNode(node)) {
+                if (significantModelNodeIds.add(nodeId)) {
+                    changed = true;
+                }
+                if (significantOutputIds.add(nodeId)) {
+                    changed = true;
+                }
+            }
+
+            changed |= addNestedBreakNodes(
+                    model,
+                    nodeId,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+        }
+        return changed;
+    }
+
+    private boolean addNestedBreakNodes(
+            FunctionModel model,
+            String nodeId,
+            Set<String> significantModelNodeIds,
+            Set<String> significantOutputIds,
+            Set<String> visitedRegionNodeIds
+    ) {
+        boolean changed = false;
+
+        IfStructure ifStructure = model.ifStructures().get(nodeId);
+        if (ifStructure != null) {
+            changed |= addBreakNodesRecursively(
+                    model,
+                    ifStructure.thenRegion(),
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            changed |= addBreakNodesRecursively(
+                    model,
+                    ifStructure.elseRegion(),
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+        }
+
+        LoopStructure loopStructure = model.loopStructures().get(nodeId);
+        if (loopStructure != null) {
+            changed |= addBreakNodesRecursively(
+                    model,
+                    loopStructure.initializerRegion(),
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            changed |= addBreakNodesRecursively(
+                    model,
+                    loopStructure.bodyRegion(),
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            changed |= addBreakNodesRecursively(
+                    model,
+                    loopStructure.iterationRegion(),
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+        }
+
+        SwitchStructure switchStructure = model.switchStructures().get(nodeId);
+        if (switchStructure != null) {
+            changed |= addBreakNodesRecursively(
+                    model,
+                    switchStructure.bodyRegion(),
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            for (BranchArm arm : switchStructure.arms()) {
+                changed |= addBreakNodesRecursively(
+                        model,
+                        arm.body(),
+                        significantModelNodeIds,
+                        significantOutputIds,
+                        visitedRegionNodeIds
+                );
+            }
+        }
+
+        return changed;
+    }
+
     private boolean isObservedSink(ProgramNode node) {
         if (definesReturnSlot(node)) {
             return true;
@@ -362,6 +511,10 @@ public final class ModelReturnInfluenceAnalyzer {
 
         String code = node.code().stripLeading();
         return code.startsWith("printf(") || code.startsWith("scanf(");
+    }
+
+    private boolean isBreakNode(ProgramNode node) {
+        return node.kind() == NodeKind.ACTION && node.code().stripLeading().startsWith("break");
     }
 
     private boolean definesReturnSlot(ProgramNode node) {

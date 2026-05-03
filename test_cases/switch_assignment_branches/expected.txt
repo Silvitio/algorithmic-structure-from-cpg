@@ -5,3 +5,4 @@ result = 0
 selector
 result = y + 1;
 result = x + y;
+break

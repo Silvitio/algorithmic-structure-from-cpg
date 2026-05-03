@@ -38,6 +38,7 @@ public final class FunctionModelBuilder {
                 node:ValueDeclaration
                 OR node:AssignExpression
                 OR node:CallExpression
+                OR node:BreakStatement
                 OR node:ReturnStatement
                 OR node:UnaryOperator
                 OR node:UnaryOp
@@ -262,6 +263,9 @@ public final class FunctionModelBuilder {
         if (labels.contains("AssignExpression")) {
             return buildAssignmentNode(tx, nodeId, code, startLine, state);
         }
+        if (labels.contains("BreakStatement")) {
+            return buildBreakNode(nodeId, code, startLine);
+        }
         if (labels.contains("ReturnStatement")) {
             return buildReturnNode(tx, nodeId, code, startLine, state);
         }
@@ -325,6 +329,14 @@ public final class FunctionModelBuilder {
         uses.addAll(defsUsesExtractor.collectWriteTargetUses(tx, lhsNodeId, state));
 
         return new ProgramNode(nodeId, NodeKind.ACTION, code, startLine, defs, uses);
+    }
+
+    private ProgramNode buildBreakNode(
+            String nodeId,
+            String code,
+            Integer startLine
+    ) {
+        return new ProgramNode(nodeId, NodeKind.ACTION, code, startLine, Set.of(), Set.of());
     }
 
     private ProgramNode buildReturnNode(
