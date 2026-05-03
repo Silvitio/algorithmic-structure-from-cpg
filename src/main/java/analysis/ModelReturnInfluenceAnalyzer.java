@@ -157,10 +157,24 @@ public final class ModelReturnInfluenceAnalyzer {
                 if (!conditionEntities.isEmpty()
                         && (significantModelNodeIds.contains(entry.getKey())
                         || (structure.conditionNodeId() != null && significantOutputIds.contains(structure.conditionNodeId())))) {
-                    if (addLoopConditionWriters(model, structure.bodyRegion(), conditionEntities, significantModelNodeIds, significantOutputIds)) {
+                    if (addLoopConditionWritersRecursively(
+                            model,
+                            structure.bodyRegion(),
+                            conditionEntities,
+                            significantModelNodeIds,
+                            significantOutputIds,
+                            new LinkedHashSet<>()
+                    )) {
                         changed = true;
                     }
-                    if (addLoopConditionWriters(model, structure.iterationRegion(), conditionEntities, significantModelNodeIds, significantOutputIds)) {
+                    if (addLoopConditionWritersRecursively(
+                            model,
+                            structure.iterationRegion(),
+                            conditionEntities,
+                            significantModelNodeIds,
+                            significantOutputIds,
+                            new LinkedHashSet<>()
+                    )) {
                         changed = true;
                     }
                 }
@@ -208,17 +222,30 @@ public final class ModelReturnInfluenceAnalyzer {
         return false;
     }
 
-    private boolean addLoopConditionWriters(
+    private boolean addLoopConditionWritersRecursively(
             FunctionModel model,
             Region region,
             Set<Entity> conditionEntities,
             Set<String> significantModelNodeIds,
-            Set<String> significantOutputIds
+            Set<String> significantOutputIds,
+            Set<String> visitedRegionNodeIds
     ) {
         boolean changed = false;
         for (String nodeId : region.nodeIds()) {
+            if (!visitedRegionNodeIds.add(nodeId)) {
+                continue;
+            }
+
             ProgramNode node = model.findByCpgNodeId(nodeId).orElse(null);
             if (node == null || !intersects(node.defs(), conditionEntities)) {
+                changed |= addNestedLoopConditionWriters(
+                        model,
+                        nodeId,
+                        conditionEntities,
+                        significantModelNodeIds,
+                        significantOutputIds,
+                        visitedRegionNodeIds
+                );
                 continue;
             }
 
@@ -228,7 +255,99 @@ public final class ModelReturnInfluenceAnalyzer {
             if (isSemanticOutputNode(node) && significantOutputIds.add(nodeId)) {
                 changed = true;
             }
+
+            changed |= addNestedLoopConditionWriters(
+                    model,
+                    nodeId,
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
         }
+        return changed;
+    }
+
+    private boolean addNestedLoopConditionWriters(
+            FunctionModel model,
+            String nodeId,
+            Set<Entity> conditionEntities,
+            Set<String> significantModelNodeIds,
+            Set<String> significantOutputIds,
+            Set<String> visitedRegionNodeIds
+    ) {
+        boolean changed = false;
+
+        IfStructure ifStructure = model.ifStructures().get(nodeId);
+        if (ifStructure != null) {
+            changed |= addLoopConditionWritersRecursively(
+                    model,
+                    ifStructure.thenRegion(),
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            changed |= addLoopConditionWritersRecursively(
+                    model,
+                    ifStructure.elseRegion(),
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+        }
+
+        LoopStructure loopStructure = model.loopStructures().get(nodeId);
+        if (loopStructure != null) {
+            changed |= addLoopConditionWritersRecursively(
+                    model,
+                    loopStructure.initializerRegion(),
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            changed |= addLoopConditionWritersRecursively(
+                    model,
+                    loopStructure.bodyRegion(),
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            changed |= addLoopConditionWritersRecursively(
+                    model,
+                    loopStructure.iterationRegion(),
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+        }
+
+        SwitchStructure switchStructure = model.switchStructures().get(nodeId);
+        if (switchStructure != null) {
+            changed |= addLoopConditionWritersRecursively(
+                    model,
+                    switchStructure.bodyRegion(),
+                    conditionEntities,
+                    significantModelNodeIds,
+                    significantOutputIds,
+                    visitedRegionNodeIds
+            );
+            for (BranchArm arm : switchStructure.arms()) {
+                changed |= addLoopConditionWritersRecursively(
+                        model,
+                        arm.body(),
+                        conditionEntities,
+                        significantModelNodeIds,
+                        significantOutputIds,
+                        visitedRegionNodeIds
+                );
+            }
+        }
+
         return changed;
     }
 
