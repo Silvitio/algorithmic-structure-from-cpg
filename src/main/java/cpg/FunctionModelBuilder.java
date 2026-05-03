@@ -327,6 +327,9 @@ public final class FunctionModelBuilder {
         Set<Entity> defs = defsUsesExtractor.collectWrittenEntities(tx, lhsNodeId, state);
         Set<Entity> uses = new LinkedHashSet<>(defsUsesExtractor.collectReadEntities(tx, rhsNodeId, state));
         uses.addAll(defsUsesExtractor.collectWriteTargetUses(tx, lhsNodeId, state));
+        if (isSupportedCompoundAssignment(code)) {
+            uses.addAll(defsUsesExtractor.collectReadEntities(tx, lhsNodeId, state));
+        }
 
         return new ProgramNode(nodeId, NodeKind.ACTION, code, startLine, defs, uses);
     }
@@ -430,6 +433,17 @@ public final class FunctionModelBuilder {
                 || "post--".equals(operatorCode)
                 || "pre++".equals(operatorCode)
                 || "pre--".equals(operatorCode);
+    }
+
+    private boolean isSupportedCompoundAssignment(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.contains("+=")
+                || code.contains("-=")
+                || code.contains("*=")
+                || code.contains("/=")
+                || code.contains("%=");
     }
 
     private String getNullableString(Record record, String key) {
