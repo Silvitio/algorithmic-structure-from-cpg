@@ -127,6 +127,10 @@ public final class CfgBuilder {
         Fragment bodyFragment = buildRegion(model, structure.bodyRegion());
         Fragment iterationFragment = buildRegion(model, structure.iterationRegion());
 
+        if (structure.conditionAfterBody()) {
+            return buildPostConditionLoop(model, owner, initializerFragment, bodyFragment, iterationFragment);
+        }
+
         ProgramNode entry = owner;
         if (initializerFragment.entry() != null) {
             entry = initializerFragment.entry();
@@ -147,6 +151,39 @@ public final class CfgBuilder {
             connectPending(iterationFragment.pendingExits(), owner, CfgEdgeKind.LOOP_BACK);
         }
 
+        List<PendingExit> pendingExits = List.of(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
+        return new Fragment(entry, pendingExits);
+    }
+
+    private Fragment buildPostConditionLoop(
+            FunctionModel model,
+            ProgramNode owner,
+            Fragment initializerFragment,
+            Fragment bodyFragment,
+            Fragment iterationFragment
+    ) {
+        ProgramNode entry = owner;
+        ProgramNode bodyEntry = firstNonNull(bodyFragment.entry(), iterationFragment.entry(), owner);
+
+        if (initializerFragment.entry() != null) {
+            entry = initializerFragment.entry();
+            connectPending(initializerFragment.pendingExits(), bodyEntry);
+        } else {
+            entry = bodyEntry;
+        }
+
+        if (bodyFragment.entry() != null) {
+            if (iterationFragment.entry() != null) {
+                connectPending(bodyFragment.pendingExits(), iterationFragment.entry());
+                connectPending(iterationFragment.pendingExits(), owner);
+            } else {
+                connectPending(bodyFragment.pendingExits(), owner);
+            }
+        } else if (iterationFragment.entry() != null) {
+            connectPending(iterationFragment.pendingExits(), owner);
+        }
+
+        connect(owner, bodyEntry, CfgEdgeKind.TRUE_BRANCH);
         List<PendingExit> pendingExits = List.of(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
         return new Fragment(entry, pendingExits);
     }

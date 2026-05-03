@@ -6,7 +6,8 @@ public record LoopStructure(
         String conditionNodeId,
         Region bodyRegion,
         Region initializerRegion,
-        Region iterationRegion
+        Region iterationRegion,
+        boolean conditionAfterBody
 ) {
     public LoopStructure {
         Objects.requireNonNull(bodyRegion, "bodyRegion must not be null");

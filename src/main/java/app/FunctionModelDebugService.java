@@ -113,6 +113,7 @@ public final class FunctionModelDebugService {
 
     private String formatLoopStructure(FunctionModel model, String ownerNodeId, LoopStructure structure) {
         return "LOOP owner=" + describeNode(model, ownerNodeId)
+                + " postCondition=" + structure.conditionAfterBody()
                 + " conditionId=" + formatRawId(structure.conditionNodeId())
                 + " init=" + formatRegion(model, structure.initializerRegion())
                 + " body=" + formatRegion(model, structure.bodyRegion())

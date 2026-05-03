@@ -461,10 +461,11 @@ public final class FunctionModelBuilder {
                 String bodyNodeId = getNullableString(record, "bodyNodeId");
                 List<String> bodyLabels = getLabels(record, "bodyLabels");
                 Region bodyRegion = collectRegionFromRoot(tx, bodyNodeId, bodyLabels, modelNodeIds);
+                boolean conditionAfterBody = labels.contains("DoStatement");
 
                 structures.put(
                         nodeId,
-                        new LoopStructure(conditionNodeId, bodyRegion, Region.empty(), Region.empty())
+                        new LoopStructure(conditionNodeId, bodyRegion, Region.empty(), Region.empty(), conditionAfterBody)
                 );
                 continue;
             }
@@ -485,7 +486,7 @@ public final class FunctionModelBuilder {
 
                 structures.put(
                         nodeId,
-                        new LoopStructure(conditionNodeId, bodyRegion, initializerRegion, iterationRegion)
+                        new LoopStructure(conditionNodeId, bodyRegion, initializerRegion, iterationRegion, false)
                 );
             }
         }
