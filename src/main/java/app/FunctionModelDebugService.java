@@ -1,6 +1,7 @@
 package app;
 
 import analysismodel.Entity;
+import analysismodel.CfgEdge;
 import analysismodel.FunctionModel;
 import analysismodel.IfStructure;
 import analysismodel.LoopStructure;
@@ -37,8 +38,12 @@ public final class FunctionModelDebugService {
 
         for (FunctionModel model : models) {
             lines.add("Function: " + model.functionName());
+            lines.add("BodyRegion: " + formatRegion(model, model.bodyRegion()));
             for (ProgramNode node : model.nodes()) {
                 lines.add(formatNode(node));
+                if (!node.outgoing().isEmpty()) {
+                    lines.add("  CFG -> " + formatEdges(model, node.outgoing()));
+                }
             }
             appendStructures(lines, model);
             lines.add("");
@@ -66,6 +71,14 @@ public final class FunctionModelDebugService {
             names.add(entity.name());
         }
         return names.toString();
+    }
+
+    private String formatEdges(FunctionModel model, List<CfgEdge> edges) {
+        List<String> descriptions = new ArrayList<>();
+        for (CfgEdge edge : edges) {
+            descriptions.add(edge.kind() + ":" + describeNode(model, edge.to().cpgNodeId()));
+        }
+        return descriptions.toString();
     }
 
     private void appendStructures(List<String> lines, FunctionModel model) {

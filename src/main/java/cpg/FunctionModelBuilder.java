@@ -150,6 +150,7 @@ public final class FunctionModelBuilder {
             """;
 
     private final DefsUsesExtractor defsUsesExtractor = new DefsUsesExtractor();
+    private final CfgBuilder cfgBuilder = new CfgBuilder();
 
     public List<FunctionModel> buildAll(Session session) {
         return session.executeRead(this::buildAll);
@@ -211,20 +212,24 @@ public final class FunctionModelBuilder {
             }
         }
 
+        Region bodyRegion = new Region(collectRegionNodeIdsFromBlock(tx, bodyNodeId, modelNodeIds));
         Map<String, IfStructure> ifStructures = buildIfStructures(tx, labelsByNodeId, modelNodeIds);
         Map<String, LoopStructure> loopStructures = buildLoopStructures(tx, labelsByNodeId, modelNodeIds);
         Map<String, SwitchStructure> switchStructures = buildSwitchStructures(tx, labelsByNodeId, modelNodeIds);
 
-        return new FunctionModel(
+        FunctionModel model = new FunctionModel(
                 functionNodeId,
                 functionName,
                 entry,
                 exit,
                 nodes,
+                bodyRegion,
                 ifStructures,
                 loopStructures,
                 switchStructures
         );
+        cfgBuilder.build(model);
+        return model;
     }
 
     private ProgramNode buildProgramNode(

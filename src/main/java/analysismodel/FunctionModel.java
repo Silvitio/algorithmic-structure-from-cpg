@@ -14,6 +14,7 @@ public final class FunctionModel {
     private final ProgramNode exit;
     private final List<ProgramNode> nodes;
     private final Map<String, ProgramNode> byCpgNodeId;
+    private final Region bodyRegion;
     private final Map<String, IfStructure> ifStructures;
     private final Map<String, LoopStructure> loopStructures;
     private final Map<String, SwitchStructure> switchStructures;
@@ -24,6 +25,7 @@ public final class FunctionModel {
             ProgramNode entry,
             ProgramNode exit,
             Collection<ProgramNode> nodes,
+            Region bodyRegion,
             Map<String, IfStructure> ifStructures,
             Map<String, LoopStructure> loopStructures,
             Map<String, SwitchStructure> switchStructures
@@ -34,6 +36,7 @@ public final class FunctionModel {
         this.exit = Objects.requireNonNull(exit, "exit must not be null");
         this.nodes = List.copyOf(Objects.requireNonNull(nodes, "nodes must not be null"));
         this.byCpgNodeId = indexNodes(this.nodes);
+        this.bodyRegion = Objects.requireNonNull(bodyRegion, "bodyRegion must not be null");
         this.ifStructures = Map.copyOf(Objects.requireNonNull(ifStructures, "ifStructures must not be null"));
         this.loopStructures = Map.copyOf(Objects.requireNonNull(loopStructures, "loopStructures must not be null"));
         this.switchStructures = Map.copyOf(Objects.requireNonNull(switchStructures, "switchStructures must not be null"));
@@ -61,6 +64,10 @@ public final class FunctionModel {
 
     public Optional<ProgramNode> findByCpgNodeId(String cpgNodeId) {
         return Optional.ofNullable(byCpgNodeId.get(cpgNodeId));
+    }
+
+    public Region bodyRegion() {
+        return bodyRegion;
     }
 
     public Map<String, IfStructure> ifStructures() {
