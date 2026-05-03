@@ -7,7 +7,6 @@ import analysismodel.Entity;
 import analysismodel.FunctionModel;
 import analysismodel.NodeKind;
 import analysismodel.ProgramNode;
-import cpg.AlgoGraphBuilder;
 import cpg.DefsUsesExtractor;
 import cpg.FunctionModelBuilder;
 import org.neo4j.driver.AuthTokens;
@@ -107,8 +106,6 @@ public final class AnalysisService {
             return collectedCodes;
         });
 
-        AlgoGraphBuilder algoGraphBuilder = new AlgoGraphBuilder();
-        algoGraphBuilder.rebuild(session);
         return markedCodes;
     }
 
