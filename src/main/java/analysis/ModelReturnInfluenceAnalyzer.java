@@ -135,13 +135,32 @@ public final class ModelReturnInfluenceAnalyzer {
 
             for (Map.Entry<String, LoopStructure> entry : model.loopStructures().entrySet()) {
                 LoopStructure structure = entry.getValue();
-                if (regionContainsSignificantModelNode(structure.bodyRegion(), significantModelNodeIds)
-                        || regionContainsSignificantModelNode(structure.initializerRegion(), significantModelNodeIds)
-                        || regionContainsSignificantModelNode(structure.iterationRegion(), significantModelNodeIds)) {
+                boolean loopBodySignificant = regionContainsSignificantModelNode(structure.bodyRegion(), significantModelNodeIds);
+                boolean loopInitSignificant = regionContainsSignificantModelNode(structure.initializerRegion(), significantModelNodeIds);
+                boolean loopIterSignificant = regionContainsSignificantModelNode(structure.iterationRegion(), significantModelNodeIds);
+
+                if (loopBodySignificant
+                        || loopInitSignificant
+                        || loopIterSignificant) {
                     if (significantModelNodeIds.add(entry.getKey())) {
                         changed = true;
                     }
                     if (structure.conditionNodeId() != null && significantOutputIds.add(structure.conditionNodeId())) {
+                        changed = true;
+                    }
+                }
+
+                Set<Entity> conditionEntities = model.findByCpgNodeId(entry.getKey())
+                        .map(ProgramNode::uses)
+                        .orElse(Set.of());
+
+                if (!conditionEntities.isEmpty()
+                        && (significantModelNodeIds.contains(entry.getKey())
+                        || (structure.conditionNodeId() != null && significantOutputIds.contains(structure.conditionNodeId())))) {
+                    if (addLoopConditionWriters(model, structure.bodyRegion(), conditionEntities, significantModelNodeIds, significantOutputIds)) {
+                        changed = true;
+                    }
+                    if (addLoopConditionWriters(model, structure.iterationRegion(), conditionEntities, significantModelNodeIds, significantOutputIds)) {
                         changed = true;
                     }
                 }
@@ -187,6 +206,30 @@ public final class ModelReturnInfluenceAnalyzer {
             }
         }
         return false;
+    }
+
+    private boolean addLoopConditionWriters(
+            FunctionModel model,
+            Region region,
+            Set<Entity> conditionEntities,
+            Set<String> significantModelNodeIds,
+            Set<String> significantOutputIds
+    ) {
+        boolean changed = false;
+        for (String nodeId : region.nodeIds()) {
+            ProgramNode node = model.findByCpgNodeId(nodeId).orElse(null);
+            if (node == null || !intersects(node.defs(), conditionEntities)) {
+                continue;
+            }
+
+            if (significantModelNodeIds.add(nodeId)) {
+                changed = true;
+            }
+            if (isSemanticOutputNode(node) && significantOutputIds.add(nodeId)) {
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private boolean isObservedSink(ProgramNode node) {
