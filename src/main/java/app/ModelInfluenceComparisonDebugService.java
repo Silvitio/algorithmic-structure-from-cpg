@@ -7,22 +7,37 @@ import analysis.ReturnInfluenceAnalyzer.AnalysisSummary;
 import analysis.ReturnInfluenceAnalyzer.FunctionInfluence;
 import analysismodel.Entity;
 import analysismodel.FunctionModel;
+import analysismodel.NodeKind;
 import analysismodel.ProgramNode;
 import cpg.FunctionModelBuilder;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Record;
 import org.neo4j.driver.Session;
 import org.neo4j.driver.SessionConfig;
+import org.neo4j.driver.TransactionContext;
+import org.neo4j.driver.Values;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public final class ModelInfluenceComparisonDebugService {
+    private static final String NODE_TEXT_QUERY = """
+            MATCH (node)
+            WHERE elementId(node) IN $nodeIds
+            RETURN
+              elementId(node) AS nodeId,
+              node.code AS code,
+              node.name AS name,
+              node.value AS value
+            """;
+
     private final ReturnInfluenceAnalyzer legacyAnalyzer = new ReturnInfluenceAnalyzer();
     private final FunctionModelBuilder functionModelBuilder = new FunctionModelBuilder();
     private final ModelReturnInfluenceAnalyzer modelAnalyzer = new ModelReturnInfluenceAnalyzer();
@@ -49,7 +64,7 @@ public final class ModelInfluenceComparisonDebugService {
             Set<String> legacyCodes = legacy == null ? Set.of() : new LinkedHashSet<>(legacy.markedCodes());
 
             ModelAnalysisResult result = modelAnalyzer.analyzeDetailed(model);
-            Set<String> modelCodes = collectModelCodes(model, result.significantNodeIds());
+            Set<String> modelCodes = resolveMarkedCodes(session, model, result.significantNodeIds());
 
             lines.add("Legacy codes: " + legacyCodes);
             lines.add("Model codes: " + modelCodes);
@@ -73,14 +88,51 @@ public final class ModelInfluenceComparisonDebugService {
         return index;
     }
 
-    private Set<String> collectModelCodes(FunctionModel model, Set<String> significantNodeIds) {
+    private Set<String> resolveMarkedCodes(
+            Session session,
+            FunctionModel model,
+            Set<String> significantNodeIds
+    ) {
+        return session.executeRead(tx -> resolveMarkedCodes(tx, model, significantNodeIds));
+    }
+
+    private Set<String> resolveMarkedCodes(
+            TransactionContext tx,
+            FunctionModel model,
+            Set<String> significantNodeIds
+    ) {
+        if (significantNodeIds.isEmpty()) {
+            return Set.of();
+        }
+
+        Map<String, String> resolvedTexts = new LinkedHashMap<>();
+        List<Record> records = tx.run(
+                NODE_TEXT_QUERY,
+                Values.parameters("nodeIds", List.copyOf(significantNodeIds))
+        ).list();
+
+        for (Record record : records) {
+            String nodeId = record.get("nodeId").asString();
+            String text = firstNonBlank(
+                    nullableString(record, "code"),
+                    nullableString(record, "name"),
+                    nullableString(record, "value")
+            );
+            if (text != null && !text.isBlank()) {
+                resolvedTexts.put(nodeId, text.strip());
+            }
+        }
+
         Set<String> codes = new LinkedHashSet<>();
         for (String nodeId : significantNodeIds) {
-            model.findByCpgNodeId(nodeId)
-                    .map(ProgramNode::code)
-                    .map(String::strip)
-                    .filter(code -> !code.isBlank())
-                    .ifPresent(codes::add);
+            ProgramNode modelNode = model.findByCpgNodeId(nodeId).orElse(null);
+            if (modelNode != null && modelNode.kind() == NodeKind.TRANSFER) {
+                continue;
+            }
+            String text = resolvedTexts.get(nodeId);
+            if (text != null && !text.isBlank()) {
+                codes.add(text);
+            }
         }
         return codes;
     }
@@ -92,7 +144,7 @@ public final class ModelInfluenceComparisonDebugService {
     }
 
     private String formatNode(FunctionModel model, ProgramNode node, ModelAnalysisResult result) {
-        boolean significant = result.significantNodeIds().contains(node.cpgNodeId());
+        boolean significant = result.significantModelNodeIds().contains(node.cpgNodeId());
         return "[" + node.kind() + "]"
                 + " line=" + (node.startLine() == null ? "?" : node.startLine())
                 + " significant=" + significant
@@ -124,5 +176,21 @@ public final class ModelInfluenceComparisonDebugService {
             return singleLine;
         }
         return singleLine.substring(0, 97) + "...";
+    }
+
+    private String nullableString(Record record, String key) {
+        if (record.get(key).isNull()) {
+            return null;
+        }
+        return record.get(key).asString();
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

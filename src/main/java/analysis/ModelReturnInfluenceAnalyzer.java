@@ -3,8 +3,13 @@ package analysis;
 import analysismodel.Entity;
 import analysismodel.EntityKind;
 import analysismodel.FunctionModel;
+import analysismodel.IfStructure;
+import analysismodel.LoopStructure;
 import analysismodel.NodeKind;
 import analysismodel.ProgramNode;
+import analysismodel.Region;
+import analysismodel.SwitchStructure;
+import analysismodel.BranchArm;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -50,22 +55,19 @@ public final class ModelReturnInfluenceAnalyzer {
             }
         }
 
-        Set<String> significantNodeIds = new LinkedHashSet<>();
+        Set<String> significantModelNodeIds = new LinkedHashSet<>();
         for (ProgramNode node : model.nodes()) {
             if (isSemanticallySignificant(node, neededOut.get(node.cpgNodeId()))) {
-                significantNodeIds.add(node.cpgNodeId());
+                significantModelNodeIds.add(node.cpgNodeId());
             }
         }
 
-        Set<Entity> participatingEntities = collectParticipatingEntities(model, significantNodeIds);
-        for (ProgramNode node : model.nodes()) {
-            if (node.kind() == NodeKind.DECLARATION && intersects(node.defs(), participatingEntities)) {
-                significantNodeIds.add(node.cpgNodeId());
-            }
-        }
+        Set<String> significantOutputIds = collectSemanticOutputNodeIds(model, significantModelNodeIds);
+        runControlPass(model, significantModelNodeIds, significantOutputIds);
 
         return new ModelAnalysisResult(
-                significantNodeIds,
+                Set.copyOf(significantOutputIds),
+                Set.copyOf(significantModelNodeIds),
                 copyEntityMap(neededIn),
                 copyEntityMap(neededOut)
         );
@@ -107,6 +109,84 @@ public final class ModelReturnInfluenceAnalyzer {
             return false;
         }
         return isObservedSink(node) || intersects(node.defs(), neededOut);
+    }
+
+    private void runControlPass(
+            FunctionModel model,
+            Set<String> significantModelNodeIds,
+            Set<String> significantOutputIds
+    ) {
+        boolean changed;
+        do {
+            changed = false;
+
+            for (Map.Entry<String, IfStructure> entry : model.ifStructures().entrySet()) {
+                IfStructure structure = entry.getValue();
+                if (regionContainsSignificantModelNode(structure.thenRegion(), significantModelNodeIds)
+                        || regionContainsSignificantModelNode(structure.elseRegion(), significantModelNodeIds)) {
+                    if (significantModelNodeIds.add(entry.getKey())) {
+                        changed = true;
+                    }
+                    if (structure.conditionNodeId() != null && significantOutputIds.add(structure.conditionNodeId())) {
+                        changed = true;
+                    }
+                }
+            }
+
+            for (Map.Entry<String, LoopStructure> entry : model.loopStructures().entrySet()) {
+                LoopStructure structure = entry.getValue();
+                if (regionContainsSignificantModelNode(structure.bodyRegion(), significantModelNodeIds)
+                        || regionContainsSignificantModelNode(structure.initializerRegion(), significantModelNodeIds)
+                        || regionContainsSignificantModelNode(structure.iterationRegion(), significantModelNodeIds)) {
+                    if (significantModelNodeIds.add(entry.getKey())) {
+                        changed = true;
+                    }
+                    if (structure.conditionNodeId() != null && significantOutputIds.add(structure.conditionNodeId())) {
+                        changed = true;
+                    }
+                }
+            }
+
+            for (Map.Entry<String, SwitchStructure> entry : model.switchStructures().entrySet()) {
+                SwitchStructure structure = entry.getValue();
+                boolean hasSignificantArm = false;
+                for (BranchArm arm : structure.arms()) {
+                    if (regionContainsSignificantModelNode(arm.body(), significantModelNodeIds)) {
+                        hasSignificantArm = true;
+                    }
+                }
+
+                if (hasSignificantArm) {
+                    if (significantModelNodeIds.add(entry.getKey())) {
+                        changed = true;
+                    }
+                    if (structure.selectorNodeId() != null && significantOutputIds.add(structure.selectorNodeId())) {
+                        changed = true;
+                    }
+                }
+            }
+
+            Set<Entity> participatingEntities = collectParticipatingEntities(model, significantModelNodeIds);
+            for (ProgramNode node : model.nodes()) {
+                if (node.kind() == NodeKind.DECLARATION && intersects(node.defs(), participatingEntities)) {
+                    if (significantModelNodeIds.add(node.cpgNodeId())) {
+                        changed = true;
+                    }
+                    if (significantOutputIds.add(node.cpgNodeId())) {
+                        changed = true;
+                    }
+                }
+            }
+        } while (changed);
+    }
+
+    private boolean regionContainsSignificantModelNode(Region region, Set<String> significantModelNodeIds) {
+        for (String nodeId : region.nodeIds()) {
+            if (significantModelNodeIds.contains(nodeId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isObservedSink(ProgramNode node) {
@@ -155,6 +235,25 @@ public final class ModelReturnInfluenceAnalyzer {
         return entities;
     }
 
+    private Set<String> collectSemanticOutputNodeIds(FunctionModel model, Set<String> significantModelNodeIds) {
+        Set<String> outputNodeIds = new LinkedHashSet<>();
+        for (String nodeId : significantModelNodeIds) {
+            model.findByCpgNodeId(nodeId).ifPresent(node -> {
+                if (isSemanticOutputNode(node)) {
+                    outputNodeIds.add(node.cpgNodeId());
+                }
+            });
+        }
+        return outputNodeIds;
+    }
+
+    private boolean isSemanticOutputNode(ProgramNode node) {
+        return switch (node.kind()) {
+            case DECLARATION, ACTION, TRANSFER -> true;
+            case ENTRY, EXIT, BRANCH, LOOP, BLOCK, LABEL -> false;
+        };
+    }
+
     private boolean replaceIfChanged(
             Map<String, Set<Entity>> map,
             String nodeId,
@@ -182,6 +281,7 @@ public final class ModelReturnInfluenceAnalyzer {
 
     public record ModelAnalysisResult(
             Set<String> significantNodeIds,
+            Set<String> significantModelNodeIds,
             Map<String, Set<Entity>> neededIn,
             Map<String, Set<Entity>> neededOut
     ) {
