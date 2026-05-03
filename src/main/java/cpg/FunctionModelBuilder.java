@@ -212,7 +212,7 @@ public final class FunctionModelBuilder {
             }
         }
 
-        Region bodyRegion = new Region(collectRegionNodeIdsFromBlock(tx, bodyNodeId, modelNodeIds));
+        Region bodyRegion = new Region(bodyNodeId, collectRegionNodeIdsFromBlock(tx, bodyNodeId, modelNodeIds));
         Map<String, IfStructure> ifStructures = buildIfStructures(tx, labelsByNodeId, modelNodeIds);
         Map<String, LoopStructure> loopStructures = buildLoopStructures(tx, labelsByNodeId, modelNodeIds);
         Map<String, SwitchStructure> switchStructures = buildSwitchStructures(tx, labelsByNodeId, modelNodeIds);
@@ -510,8 +510,12 @@ public final class FunctionModelBuilder {
             String selectorNodeId = getNullableString(record, "selectorNodeId");
             String bodyNodeId = getNullableString(record, "bodyNodeId");
 
+            Region bodyRegion = new Region(
+                    bodyNodeId,
+                    bodyNodeId == null ? List.of() : collectRegionNodeIdsFromBlock(tx, bodyNodeId, modelNodeIds)
+            );
             List<BranchArm> arms = collectSwitchArms(tx, bodyNodeId, modelNodeIds);
-            structures.put(entry.getKey(), new SwitchStructure(selectorNodeId, arms));
+            structures.put(entry.getKey(), new SwitchStructure(selectorNodeId, bodyRegion, arms));
         }
 
         return structures;
@@ -539,7 +543,11 @@ public final class FunctionModelBuilder {
 
             if (isSwitchMarker(labels)) {
                 if (currentMarkerNodeId != null) {
-                    arms.add(new BranchArm(currentMarkerNodeId, new Region(currentBodyNodeIds), currentDefault));
+                    arms.add(new BranchArm(
+                            currentMarkerNodeId,
+                            new Region(detectArmBlockNodeId(tx, currentBodyNodeIds, bodyNodeId), currentBodyNodeIds),
+                            currentDefault
+                    ));
                 }
                 currentMarkerNodeId = statementNodeId;
                 currentDefault = labels.contains("DefaultStatement");
@@ -551,7 +559,11 @@ public final class FunctionModelBuilder {
         }
 
         if (currentMarkerNodeId != null) {
-            arms.add(new BranchArm(currentMarkerNodeId, new Region(currentBodyNodeIds), currentDefault));
+            arms.add(new BranchArm(
+                    currentMarkerNodeId,
+                    new Region(detectArmBlockNodeId(tx, currentBodyNodeIds, bodyNodeId), currentBodyNodeIds),
+                    currentDefault
+            ));
         }
 
         return arms;
@@ -566,7 +578,10 @@ public final class FunctionModelBuilder {
         if (rootNodeId == null) {
             return Region.empty();
         }
-        return new Region(collectRegionNodeIdsFromRoot(tx, rootNodeId, rootLabels, modelNodeIds));
+        return new Region(
+                rootLabels.contains("Block") ? rootNodeId : null,
+                collectRegionNodeIdsFromRoot(tx, rootNodeId, rootLabels, modelNodeIds)
+        );
     }
 
     private List<String> collectRegionNodeIdsFromRoot(
@@ -612,5 +627,28 @@ public final class FunctionModelBuilder {
 
     private boolean isSwitchMarker(List<String> labels) {
         return labels.contains("CaseStatement") || labels.contains("DefaultStatement");
+    }
+
+    private String detectArmBlockNodeId(
+            TransactionContext tx,
+            List<String> armNodeIds,
+            String switchBodyNodeId
+    ) {
+        if (armNodeIds.isEmpty() || switchBodyNodeId == null) {
+            return null;
+        }
+
+        List<Record> statements = tx.run(BLOCK_STATEMENTS_QUERY, Values.parameters("blockNodeId", switchBodyNodeId)).list();
+        for (Record statement : statements) {
+            String statementNodeId = statement.get("statementNodeId").asString();
+            List<String> labels = statement.get("labels").asList(Value::asString);
+            if (labels.contains("Block")) {
+                List<String> blockNodeIds = collectRegionNodeIdsFromBlock(tx, statementNodeId, new LinkedHashSet<>(armNodeIds));
+                if (blockNodeIds.equals(armNodeIds)) {
+                    return statementNodeId;
+                }
+            }
+        }
+        return null;
     }
 }

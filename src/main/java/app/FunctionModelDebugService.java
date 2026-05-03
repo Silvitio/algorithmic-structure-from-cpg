@@ -129,19 +129,20 @@ public final class FunctionModelDebugService {
 
         return "SWITCH owner=" + describeNode(model, ownerNodeId)
                 + " selectorId=" + formatRawId(structure.selectorNodeId())
+                + " body=" + formatRegion(model, structure.bodyRegion())
                 + " arms=" + armDescriptions;
     }
 
     private String formatRegion(FunctionModel model, Region region) {
         if (region.nodeIds().isEmpty()) {
-            return "[]";
+            return "[blockId=" + formatRawId(region.blockNodeId()) + "; nodes=[]]";
         }
 
         List<String> descriptions = new ArrayList<>();
         for (String nodeId : region.nodeIds()) {
             descriptions.add(describeNode(model, nodeId));
         }
-        return descriptions.toString();
+        return "[blockId=" + formatRawId(region.blockNodeId()) + "; nodes=" + descriptions + "]";
     }
 
     private String describeNode(FunctionModel model, String nodeId) {
