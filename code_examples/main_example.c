@@ -1,26 +1,20 @@
 ﻿#include "stdio.h"
 
 int main() {
-    int selector = 2;
-    int x = 10;
-    int y = 20;
-    int result = 0;
+    int x = 3;
+    int y = 10;
+    int z = 0;
+    int noise = 5;
 
-    switch (selector) {
-    case 1:
-        result = x;
-        break;
-
-    case 2: {
-        result = y + 1;
-        printf("%d\n", result);
-        break;
+    while (x > 0) {
+        if (y > 0) {
+            z = z + 1;
+        } else {
+            noise = noise + 10;
+            x = x + 43;
+        }
+        x--;
     }
 
-    default:
-        result = x + y;
-        return result;
-    }
-
-    return result;
+    return z;
 }

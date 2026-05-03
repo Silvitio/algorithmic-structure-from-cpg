@@ -1,5 +1,6 @@
 package app;
 
+import analysis.DeadCodeAnalyzer;
 import analysis.ModelReturnInfluenceAnalyzer;
 import analysis.ModelReturnInfluenceAnalyzer.ModelAnalysisResult;
 import analysis.ModelStructuralSignificanceAnalyzer;
@@ -60,6 +61,7 @@ public final class AnalysisService {
     private final ModelReturnInfluenceAnalyzer modelReturnInfluenceAnalyzer = new ModelReturnInfluenceAnalyzer();
     private final ModelStructuralSignificanceAnalyzer modelStructuralSignificanceAnalyzer =
             new ModelStructuralSignificanceAnalyzer();
+    private final DeadCodeAnalyzer deadCodeAnalyzer = new DeadCodeAnalyzer();
 
     public List<String> collectMarkedCodes() {
         try (Driver driver = GraphDatabase.driver(URI, AuthTokens.basic(USER, PASSWORD));
@@ -86,6 +88,7 @@ public final class AnalysisService {
 
                 markNodes(tx, semanticResult.significantNodeIds(), MARK_INFLUENCE_QUERY);
                 markNodes(tx, structuralNodeIds, MARK_STRUCTURAL_QUERY);
+                deadCodeAnalyzer.analyze(tx, model, semanticResult.significantNodeIds(), structuralNodeIds);
 
                 collectedCodes.addAll(resolveMarkedCodes(tx, model, semanticResult));
             }
