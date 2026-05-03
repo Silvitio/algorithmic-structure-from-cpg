@@ -18,6 +18,7 @@ public final class FunctionModel {
     private final Map<String, IfStructure> ifStructures;
     private final Map<String, LoopStructure> loopStructures;
     private final Map<String, SwitchStructure> switchStructures;
+    private final Map<String, String> declarationStatementByValueDeclarationId;
 
     public FunctionModel(
             String functionNodeId,
@@ -28,7 +29,8 @@ public final class FunctionModel {
             Region bodyRegion,
             Map<String, IfStructure> ifStructures,
             Map<String, LoopStructure> loopStructures,
-            Map<String, SwitchStructure> switchStructures
+            Map<String, SwitchStructure> switchStructures,
+            Map<String, String> declarationStatementByValueDeclarationId
     ) {
         this.functionNodeId = requireText(functionNodeId, "functionNodeId");
         this.functionName = requireText(functionName, "functionName");
@@ -40,6 +42,10 @@ public final class FunctionModel {
         this.ifStructures = Map.copyOf(Objects.requireNonNull(ifStructures, "ifStructures must not be null"));
         this.loopStructures = Map.copyOf(Objects.requireNonNull(loopStructures, "loopStructures must not be null"));
         this.switchStructures = Map.copyOf(Objects.requireNonNull(switchStructures, "switchStructures must not be null"));
+        this.declarationStatementByValueDeclarationId = Map.copyOf(Objects.requireNonNull(
+                declarationStatementByValueDeclarationId,
+                "declarationStatementByValueDeclarationId must not be null"
+        ));
     }
 
     public String functionNodeId() {
@@ -80,6 +86,10 @@ public final class FunctionModel {
 
     public Map<String, SwitchStructure> switchStructures() {
         return switchStructures;
+    }
+
+    public Optional<String> declarationStatementNodeId(String valueDeclarationNodeId) {
+        return Optional.ofNullable(declarationStatementByValueDeclarationId.get(valueDeclarationNodeId));
     }
 
     private static Map<String, ProgramNode> indexNodes(List<ProgramNode> nodes) {

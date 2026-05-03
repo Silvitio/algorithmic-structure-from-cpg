@@ -23,7 +23,7 @@ public final class ModelStructuralSignificanceAnalyzer {
 
         for (ProgramNode node : model.nodes()) {
             if (node.kind() == NodeKind.DECLARATION && significantModelNodeIds.contains(node.cpgNodeId())) {
-                structuralNodeIds.add(node.cpgNodeId());
+                model.declarationStatementNodeId(node.cpgNodeId()).ifPresent(structuralNodeIds::add);
             }
         }
 

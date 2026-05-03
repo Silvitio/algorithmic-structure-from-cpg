@@ -35,7 +35,7 @@ public final class FunctionModelBuilder {
             MATCH (body)-[:AST*0..]->(node)
             WHERE elementId(body) = $bodyNodeId
               AND (
-                node:DeclarationStatement
+                node:ValueDeclaration
                 OR node:AssignExpression
                 OR node:CallExpression
                 OR node:ReturnStatement
@@ -62,9 +62,19 @@ public final class FunctionModelBuilder {
             RETURN
               elementId(declaration) AS declarationNodeId,
               declaration.name AS declarationName,
+              declaration.code AS declarationCode,
+              declaration.startLine AS declarationStartLine,
               elementId(initializer) AS initializerNodeId,
               declRel.index AS declarationIndex
             ORDER BY declarationIndex, declarationNodeId
+            """;
+    private static final String VALUE_DECLARATION_QUERY = """
+            MATCH (declaration:ValueDeclaration)
+            WHERE elementId(declaration) = $declarationNodeId
+            OPTIONAL MATCH (declaration)-[:INITIALIZER]->(initializer)
+            RETURN
+              declaration.name AS declarationName,
+              elementId(initializer) AS initializerNodeId
             """;
     private static final String ASSIGNMENT_SIDES_QUERY = """
             MATCH (assignment)
@@ -174,6 +184,7 @@ public final class FunctionModelBuilder {
 
         DefsUsesExtractor.ExtractionState state = defsUsesExtractor.newState();
         List<ProgramNode> nodes = new ArrayList<>();
+        Map<String, String> declarationStatementByValueDeclarationId = new LinkedHashMap<>();
 
         ProgramNode entry = new ProgramNode(
                 functionNodeId + ":ENTRY",
@@ -189,7 +200,7 @@ public final class FunctionModelBuilder {
         Map<String, List<String>> labelsByNodeId = new LinkedHashMap<>();
         for (Record nodeRecord : modelNodeRecords) {
             labelsByNodeId.put(nodeRecord.get("nodeId").asString(), nodeRecord.get("labels").asList(Value::asString));
-            ProgramNode node = buildProgramNode(tx, nodeRecord, state);
+            ProgramNode node = buildProgramNode(tx, nodeRecord, state, declarationStatementByValueDeclarationId);
             if (node != null) {
                 nodes.add(node);
             }
@@ -226,7 +237,8 @@ public final class FunctionModelBuilder {
                 bodyRegion,
                 ifStructures,
                 loopStructures,
-                switchStructures
+                switchStructures,
+                declarationStatementByValueDeclarationId
         );
         cfgBuilder.build(model);
         return model;
@@ -235,7 +247,8 @@ public final class FunctionModelBuilder {
     private ProgramNode buildProgramNode(
             TransactionContext tx,
             Record nodeRecord,
-            DefsUsesExtractor.ExtractionState state
+            DefsUsesExtractor.ExtractionState state,
+            Map<String, String> declarationStatementByValueDeclarationId
     ) {
         String nodeId = nodeRecord.get("nodeId").asString();
         List<String> labels = nodeRecord.get("labels").asList(Value::asString);
@@ -243,8 +256,8 @@ public final class FunctionModelBuilder {
         Integer startLine = nodeRecord.get("startLine").isNull() ? null : nodeRecord.get("startLine").asInt();
         String operatorCode = nodeRecord.get("operatorCode").isNull() ? null : nodeRecord.get("operatorCode").asString();
 
-        if (labels.contains("DeclarationStatement")) {
-            return buildDeclarationNode(tx, nodeId, code, startLine, state);
+        if (labels.contains("ValueDeclaration")) {
+            return buildDeclarationNode(tx, nodeId, code, startLine, state, declarationStatementByValueDeclarationId);
         }
         if (labels.contains("AssignExpression")) {
             return buildAssignmentNode(tx, nodeId, code, startLine, state);
@@ -282,20 +295,16 @@ public final class FunctionModelBuilder {
             String nodeId,
             String code,
             Integer startLine,
-            DefsUsesExtractor.ExtractionState state
+            DefsUsesExtractor.ExtractionState state,
+            Map<String, String> declarationStatementByValueDeclarationId
     ) {
-        Set<Entity> defs = new LinkedHashSet<>();
-        Set<Entity> uses = new LinkedHashSet<>();
+        Record record = tx.run(VALUE_DECLARATION_QUERY, Values.parameters("declarationNodeId", nodeId)).single();
+        String declarationName = getNullableString(record, "declarationName");
+        String initializerNodeId = getNullableString(record, "initializerNodeId");
 
-        List<Record> declarations = tx.run(DECLARATIONS_QUERY, Values.parameters("statementNodeId", nodeId)).list();
-        for (Record declaration : declarations) {
-            String declarationNodeId = getNullableString(declaration, "declarationNodeId");
-            String declarationName = getNullableString(declaration, "declarationName");
-            defs.addAll(defsUsesExtractor.declarationEntities(tx, declarationNodeId, declarationName, state));
-
-            String initializerNodeId = getNullableString(declaration, "initializerNodeId");
-            uses.addAll(defsUsesExtractor.collectReadEntities(tx, initializerNodeId, state));
-        }
+        Set<Entity> defs = defsUsesExtractor.declarationEntities(tx, nodeId, declarationName, state);
+        Set<Entity> uses = defsUsesExtractor.collectReadEntities(tx, initializerNodeId, state);
+        declarationStatementByValueDeclarationId.put(nodeId, loadDeclarationStatementNodeId(tx, nodeId));
 
         return new ProgramNode(nodeId, NodeKind.DECLARATION, code, startLine, defs, uses);
     }
@@ -596,10 +605,29 @@ public final class FunctionModelBuilder {
         if (rootLabels.contains("Block")) {
             return collectRegionNodeIdsFromBlock(tx, rootNodeId, modelNodeIds);
         }
+        if (rootLabels.contains("DeclarationStatement")) {
+            return collectDeclarationNodeIds(tx, rootNodeId, modelNodeIds);
+        }
         if (modelNodeIds.contains(rootNodeId)) {
             return List.of(rootNodeId);
         }
         return List.of();
+    }
+
+    private List<String> collectDeclarationNodeIds(
+            TransactionContext tx,
+            String statementNodeId,
+            Set<String> modelNodeIds
+    ) {
+        List<String> declarationNodeIds = new ArrayList<>();
+        List<Record> declarations = tx.run(DECLARATIONS_QUERY, Values.parameters("statementNodeId", statementNodeId)).list();
+        for (Record declaration : declarations) {
+            String declarationNodeId = getNullableString(declaration, "declarationNodeId");
+            if (declarationNodeId != null && modelNodeIds.contains(declarationNodeId)) {
+                declarationNodeIds.add(declarationNodeId);
+            }
+        }
+        return declarationNodeIds;
     }
 
     private List<String> collectRegionNodeIdsFromBlock(
@@ -650,5 +678,17 @@ public final class FunctionModelBuilder {
             }
         }
         return null;
+    }
+
+    private String loadDeclarationStatementNodeId(TransactionContext tx, String declarationNodeId) {
+        List<Record> records = tx.run("""
+                MATCH (statement:DeclarationStatement)-[:DECLARATIONS]->(declaration:ValueDeclaration)
+                WHERE elementId(declaration) = $declarationNodeId
+                RETURN elementId(statement) AS statementNodeId
+                """, Values.parameters("declarationNodeId", declarationNodeId)).list();
+        if (records.isEmpty()) {
+            return null;
+        }
+        return getNullableString(records.get(0), "statementNodeId");
     }
 }

@@ -3,7 +3,6 @@ package app;
 import analysis.ModelReturnInfluenceAnalyzer;
 import analysis.ModelReturnInfluenceAnalyzer.ModelAnalysisResult;
 import analysis.ModelStructuralSignificanceAnalyzer;
-import analysismodel.Entity;
 import analysismodel.FunctionModel;
 import analysismodel.NodeKind;
 import analysismodel.ProgramNode;
@@ -57,22 +56,10 @@ public final class AnalysisService {
             WHERE elementId(node) = $nodeId
             RETURN node.code AS code, node.name AS name, node.value AS value
             """;
-    private static final String DECLARATIONS_QUERY = """
-            MATCH (statement)-[declRel:DECLARATIONS]->(declaration:ValueDeclaration)
-            WHERE elementId(statement) = $statementNodeId
-            RETURN
-              elementId(declaration) AS declarationNodeId,
-              declaration.name AS declarationName,
-              declaration.code AS declarationCode,
-              declRel.index AS declarationIndex
-            ORDER BY declarationIndex, declarationNodeId
-            """;
-
     private final FunctionModelBuilder functionModelBuilder = new FunctionModelBuilder();
     private final ModelReturnInfluenceAnalyzer modelReturnInfluenceAnalyzer = new ModelReturnInfluenceAnalyzer();
     private final ModelStructuralSignificanceAnalyzer modelStructuralSignificanceAnalyzer =
             new ModelStructuralSignificanceAnalyzer();
-    private final DefsUsesExtractor defsUsesExtractor = new DefsUsesExtractor();
 
     public List<String> collectMarkedCodes() {
         try (Driver driver = GraphDatabase.driver(URI, AuthTokens.basic(USER, PASSWORD));
@@ -120,18 +107,10 @@ public final class AnalysisService {
             FunctionModel model,
             ModelAnalysisResult result
     ) {
-        Set<Entity> participatingEntities = collectParticipatingEntities(model, result.significantModelNodeIds());
-        DefsUsesExtractor.ExtractionState extractionState = defsUsesExtractor.newState();
-
         List<String> codes = new ArrayList<>();
         for (String nodeId : result.significantNodeIds()) {
             ProgramNode modelNode = model.findByCpgNodeId(nodeId).orElse(null);
             if (modelNode != null && modelNode.kind() == NodeKind.TRANSFER) {
-                continue;
-            }
-
-            if (modelNode != null && modelNode.kind() == NodeKind.DECLARATION) {
-                codes.addAll(resolveDeclarationCodes(tx, modelNode.cpgNodeId(), participatingEntities, extractionState));
                 continue;
             }
 
@@ -142,56 +121,6 @@ public final class AnalysisService {
         }
 
         return codes;
-    }
-
-    private List<String> resolveDeclarationCodes(
-            TransactionContext tx,
-            String statementNodeId,
-            Set<Entity> participatingEntities,
-            DefsUsesExtractor.ExtractionState extractionState
-    ) {
-        List<String> codes = new ArrayList<>();
-        List<Record> declarationRecords = tx.run(
-                DECLARATIONS_QUERY,
-                Values.parameters("statementNodeId", statementNodeId)
-        ).list();
-
-        for (Record declarationRecord : declarationRecords) {
-            String declarationNodeId = declarationRecord.get("declarationNodeId").asString();
-            String declarationName = nullableString(declarationRecord, "declarationName");
-            Set<Entity> declarationEntities =
-                    defsUsesExtractor.declarationEntities(tx, declarationNodeId, declarationName, extractionState);
-            if (!intersects(declarationEntities, participatingEntities)) {
-                continue;
-            }
-
-            String declarationCode = nullableString(declarationRecord, "declarationCode");
-            if (declarationCode != null && !declarationCode.isBlank()) {
-                codes.add(declarationCode.strip());
-            }
-        }
-
-        return codes;
-    }
-
-    private Set<Entity> collectParticipatingEntities(FunctionModel model, Set<String> significantModelNodeIds) {
-        Set<Entity> entities = new LinkedHashSet<>();
-        for (String nodeId : significantModelNodeIds) {
-            model.findByCpgNodeId(nodeId).ifPresent(node -> {
-                entities.addAll(node.defs());
-                entities.addAll(node.uses());
-            });
-        }
-        return entities;
-    }
-
-    private boolean intersects(Set<Entity> left, Set<Entity> right) {
-        for (Entity entity : left) {
-            if (right.contains(entity)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String resolveNodeText(TransactionContext tx, String nodeId) {
