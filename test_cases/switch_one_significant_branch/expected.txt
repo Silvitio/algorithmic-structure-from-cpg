@@ -1,2 +1,4 @@
+selector = 0
+selector
 result = 10
 printf("%d\n", result);

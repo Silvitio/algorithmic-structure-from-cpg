@@ -1,4 +1,6 @@
 selector = 1
 y = 20
+x = 10
 selector
 y++
+x++

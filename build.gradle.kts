@@ -27,3 +27,10 @@ tasks.register<JavaExec>("runTestRunner") {
     mainClass.set("app.AnalysisTestRunner")
     standardInput = System.`in`
 }
+
+tasks.register<JavaExec>("runModelAnalysisReport") {
+    group = "application"
+    description = "Runs the model-only analysis report over all test cases"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("app.ModelAnalysisReportRunner")
+}

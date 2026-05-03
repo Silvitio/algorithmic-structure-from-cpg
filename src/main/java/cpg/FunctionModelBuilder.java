@@ -156,7 +156,7 @@ public final class FunctionModelBuilder {
         return session.executeRead(this::buildAll);
     }
 
-    private List<FunctionModel> buildAll(TransactionContext tx) {
+    public List<FunctionModel> buildAll(TransactionContext tx) {
         List<FunctionModel> models = new ArrayList<>();
         List<Record> functions = tx.run(FUNCTION_QUERY).list();
 
