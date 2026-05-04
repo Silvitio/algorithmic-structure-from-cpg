@@ -65,11 +65,18 @@ public final class AlgoGraphBuilder {
               elementId(iteration) AS iterationNodeId,
               labels(iteration) AS iterationLabels
             """;
-    private static final String DECLARATIONS_WITH_INITIALIZER_QUERY = """
+    private static final String SWITCH_DETAILS_QUERY = """
+            MATCH (statement)
+            WHERE elementId(statement) = $statementNodeId
+            OPTIONAL MATCH (statement)-[:STATEMENT]->(body)
+            RETURN
+              elementId(body) AS bodyNodeId,
+              labels(body) AS bodyLabels
+            """;
+    private static final String LIVE_DECLARATIONS_QUERY = """
             MATCH (statement)-[declRel:DECLARATIONS]->(declaration:ValueDeclaration)
             WHERE elementId(statement) = $statementNodeId
               AND NOT declaration:DEAD_CODE
-            MATCH (declaration)-[:INITIALIZER]->(:Expression)
             RETURN elementId(declaration) AS declarationNodeId
             ORDER BY declRel.index, declarationNodeId
             """;
@@ -139,35 +146,37 @@ public final class AlgoGraphBuilder {
             """;
 
     public BuildSummary rebuild(Session session) {
-        return session.executeWrite(tx -> {
-            tx.run(CLEAR_ALGO_LAYER_QUERY).consume();
+        return session.executeWrite(this::rebuild);
+    }
 
-            List<Record> functionRecords = tx.run(FUNCTION_QUERY).list();
-            List<FunctionProjection> functions = new ArrayList<>();
+    public BuildSummary rebuild(TransactionContext tx) {
+        tx.run(CLEAR_ALGO_LAYER_QUERY).consume();
 
-            for (Record functionRecord : functionRecords) {
-                String functionNodeId = functionRecord.get("functionNodeId").asString();
-                String functionName = functionRecord.get("functionName").asString();
-                String bodyNodeId = functionRecord.get("bodyNodeId").asString();
+        List<Record> functionRecords = tx.run(FUNCTION_QUERY).list();
+        List<FunctionProjection> functions = new ArrayList<>();
 
-                String rootAlgoNodeId = buildBlockNode(tx, bodyNodeId);
-                if (rootAlgoNodeId != null) {
-                    createFunctionReference(tx, functionNodeId, rootAlgoNodeId);
-                }
+        for (Record functionRecord : functionRecords) {
+            String functionNodeId = functionRecord.get("functionNodeId").asString();
+            String functionName = functionRecord.get("functionName").asString();
+            String bodyNodeId = functionRecord.get("bodyNodeId").asString();
 
-                functions.add(new FunctionProjection(functionName, functionNodeId, rootAlgoNodeId));
+            String rootAlgoNodeId = buildBlockNode(tx, bodyNodeId);
+            if (rootAlgoNodeId != null) {
+                createFunctionReference(tx, functionNodeId, rootAlgoNodeId);
             }
 
-            Record summaryRecord = tx.run(BUILD_SUMMARY_QUERY).single();
-            return new BuildSummary(
-                    functions,
-                    summaryRecord.get("algoNodes").asInt(),
-                    summaryRecord.get("codeActions").asInt(),
-                    summaryRecord.get("sequences").asInt(),
-                    summaryRecord.get("loops").asInt(),
-                    summaryRecord.get("branches").asInt()
-            );
-        });
+            functions.add(new FunctionProjection(functionName, functionNodeId, rootAlgoNodeId));
+        }
+
+        Record summaryRecord = tx.run(BUILD_SUMMARY_QUERY).single();
+        return new BuildSummary(
+                functions,
+                summaryRecord.get("algoNodes").asInt(),
+                summaryRecord.get("codeActions").asInt(),
+                summaryRecord.get("sequences").asInt(),
+                summaryRecord.get("loops").asInt(),
+                summaryRecord.get("branches").asInt()
+        );
     }
 
     private String buildBlockNode(TransactionContext tx, String blockNodeId) {
@@ -207,10 +216,13 @@ public final class AlgoGraphBuilder {
         if (labels.contains("IfStatement")) {
             return List.of(buildBranchNode(tx, statementNodeId));
         }
+        if (labels.contains("SwitchStatement")) {
+            return List.of(buildSwitchNode(tx, statementNodeId));
+        }
         if (labels.contains("ForStatement")) {
             return buildForStatementNodes(tx, statementNodeId);
         }
-        if (labels.contains("WhileStatement")) {
+        if (labels.contains("WhileStatement") || labels.contains("DoStatement")) {
             return List.of(buildLoopNode(tx, statementNodeId));
         }
         if (labels.contains("Statement")) {
@@ -222,7 +234,7 @@ public final class AlgoGraphBuilder {
 
     private List<String> buildDeclarationActionNodes(TransactionContext tx, String statementNodeId) {
         List<Record> declarationRecords = tx.run(
-                DECLARATIONS_WITH_INITIALIZER_QUERY,
+                LIVE_DECLARATIONS_QUERY,
                 Values.parameters("statementNodeId", statementNodeId)
         ).list();
 
@@ -347,6 +359,80 @@ public final class AlgoGraphBuilder {
         return algoNodeId;
     }
 
+    private String buildSwitchNode(TransactionContext tx, String statementNodeId) {
+        String algoNodeId = tx.run(
+                CREATE_BRANCH_QUERY,
+                Values.parameters("sourceNodeId", statementNodeId)
+        ).single().get("algoNodeId").asString();
+
+        createAlgoReference(tx, algoNodeId, statementNodeId);
+
+        Record switchRecord = tx.run(
+                SWITCH_DETAILS_QUERY,
+                Values.parameters("statementNodeId", statementNodeId)
+        ).single();
+
+        String bodyNodeId = nullableString(switchRecord, "bodyNodeId");
+        List<String> bodyLabels = toStringList(switchRecord.get("bodyLabels"));
+        if (bodyNodeId == null || !bodyLabels.contains("Block")) {
+            return algoNodeId;
+        }
+
+        List<Record> statementRecords = tx.run(
+                BLOCK_STATEMENTS_QUERY,
+                Values.parameters("blockNodeId", bodyNodeId)
+        ).list();
+
+        String currentMarkerNodeId = null;
+        boolean currentDefault = false;
+        List<String> currentChildAlgoNodeIds = new ArrayList<>();
+
+        for (Record statementRecord : statementRecords) {
+            String childStatementNodeId = statementRecord.get("statementNodeId").asString();
+            List<String> childLabels = statementRecord.get("labels").asList(Value::asString);
+
+            if (isSwitchMarker(childLabels)) {
+                attachSwitchArm(tx, algoNodeId, currentMarkerNodeId, currentDefault, currentChildAlgoNodeIds);
+                currentMarkerNodeId = childStatementNodeId;
+                currentDefault = childLabels.contains("DefaultStatement");
+                currentChildAlgoNodeIds = new ArrayList<>();
+                continue;
+            }
+
+            currentChildAlgoNodeIds.addAll(buildStatementNodes(tx, childStatementNodeId, childLabels));
+        }
+
+        attachSwitchArm(tx, algoNodeId, currentMarkerNodeId, currentDefault, currentChildAlgoNodeIds);
+        return algoNodeId;
+    }
+
+    private void attachSwitchArm(
+            TransactionContext tx,
+            String branchAlgoNodeId,
+            String markerNodeId,
+            boolean isDefault,
+            List<String> armChildAlgoNodeIds
+    ) {
+        if (markerNodeId == null) {
+            return;
+        }
+
+        List<String> childAlgoNodeIds = new ArrayList<>();
+        childAlgoNodeIds.add(buildCodeActionNode(tx, markerNodeId));
+        childAlgoNodeIds.addAll(armChildAlgoNodeIds);
+
+        String armAlgoNodeId = wrapSequenceIfNeeded(tx, childAlgoNodeIds);
+        if (armAlgoNodeId == null) {
+            return;
+        }
+
+        if (isDefault) {
+            createAlgoElse(tx, branchAlgoNodeId, armAlgoNodeId);
+        } else {
+            createAlgoThen(tx, branchAlgoNodeId, armAlgoNodeId);
+        }
+    }
+
     private String buildOptionalNode(TransactionContext tx, Value nodeIdValue, Value labelsValue) {
         List<String> childNodeIds = buildOptionalNodes(tx, nodeIdValue, labelsValue);
         return wrapSequenceIfNeeded(tx, childNodeIds);
@@ -420,6 +506,15 @@ public final class AlgoGraphBuilder {
 
     private List<String> toStringList(Value value) {
         return value == null || value.isNull() ? List.of() : value.asList(Value::asString);
+    }
+
+    private String nullableString(Record record, String key) {
+        Value value = record.get(key);
+        return value == null || value.isNull() ? null : value.asString();
+    }
+
+    private boolean isSwitchMarker(List<String> labels) {
+        return labels.contains("CaseStatement") || labels.contains("DefaultStatement");
     }
 
     public record FunctionProjection(

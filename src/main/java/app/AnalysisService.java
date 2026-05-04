@@ -7,7 +7,7 @@ import analysis.ModelStructuralSignificanceAnalyzer;
 import analysismodel.FunctionModel;
 import analysismodel.NodeKind;
 import analysismodel.ProgramNode;
-import cpg.DefsUsesExtractor;
+import cpg.AlgoGraphBuilder;
 import cpg.FunctionModelBuilder;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
@@ -62,6 +62,7 @@ public final class AnalysisService {
     private final ModelStructuralSignificanceAnalyzer modelStructuralSignificanceAnalyzer =
             new ModelStructuralSignificanceAnalyzer();
     private final DeadCodeAnalyzer deadCodeAnalyzer = new DeadCodeAnalyzer();
+    private final AlgoGraphBuilder algoGraphBuilder = new AlgoGraphBuilder();
 
     public List<String> collectMarkedCodes() {
         try (Driver driver = GraphDatabase.driver(URI, AuthTokens.basic(USER, PASSWORD));
@@ -92,6 +93,8 @@ public final class AnalysisService {
 
                 collectedCodes.addAll(resolveMarkedCodes(tx, model, semanticResult));
             }
+
+            algoGraphBuilder.rebuild(tx);
 
             return collectedCodes;
         });
