@@ -271,7 +271,7 @@ public final class ModelReturnInfluenceAnalyzer {
             Set<String> visitedRegionNodeIds
     ) {
         boolean changed = false;
-        for (String nodeId : region.nodeIds()) {
+        for (String nodeId : collectReachableRegionNodeIds(model, region)) {
             if (!visitedRegionNodeIds.add(nodeId)) {
                 continue;
             }
@@ -399,7 +399,7 @@ public final class ModelReturnInfluenceAnalyzer {
             Set<String> visitedRegionNodeIds
     ) {
         boolean changed = false;
-        for (String nodeId : region.nodeIds()) {
+        for (String nodeId : collectReachableRegionNodeIds(model, region)) {
             if (!visitedRegionNodeIds.add(nodeId)) {
                 continue;
             }
@@ -423,6 +423,44 @@ public final class ModelReturnInfluenceAnalyzer {
             );
         }
         return changed;
+    }
+
+    private List<String> collectReachableRegionNodeIds(FunctionModel model, Region region) {
+        if (region.nodeIds().isEmpty()) {
+            return List.of();
+        }
+
+        ProgramNode entryNode = null;
+        for (String nodeId : region.nodeIds()) {
+            entryNode = model.findByCpgNodeId(nodeId).orElse(null);
+            if (entryNode != null) {
+                break;
+            }
+        }
+        if (entryNode == null) {
+            return List.of();
+        }
+
+        Set<String> allowedNodeIds = new LinkedHashSet<>(region.nodeIds());
+        Set<String> reachableNodeIds = new LinkedHashSet<>();
+        Set<String> visitedNodeIds = new LinkedHashSet<>();
+        Deque<ProgramNode> worklist = new ArrayDeque<>();
+        worklist.addLast(entryNode);
+
+        while (!worklist.isEmpty()) {
+            ProgramNode node = worklist.removeFirst();
+            if (!visitedNodeIds.add(node.cpgNodeId())) {
+                continue;
+            }
+
+            if (allowedNodeIds.contains(node.cpgNodeId())) {
+                reachableNodeIds.add(node.cpgNodeId());
+            }
+
+            node.outgoing().forEach(edge -> worklist.addLast(edge.to()));
+        }
+
+        return new ArrayList<>(reachableNodeIds);
     }
 
     private boolean addNestedBreakNodes(
@@ -514,7 +552,7 @@ public final class ModelReturnInfluenceAnalyzer {
     }
 
     private boolean isBreakNode(ProgramNode node) {
-        return node.kind() == NodeKind.ACTION && node.code().stripLeading().startsWith("break");
+        return node.kind() == NodeKind.TRANSFER && !definesReturnSlot(node);
     }
 
     private boolean definesReturnSlot(ProgramNode node) {

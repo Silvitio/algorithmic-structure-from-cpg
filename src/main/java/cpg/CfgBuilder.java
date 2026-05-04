@@ -28,6 +28,8 @@ public final class CfgBuilder {
     private Fragment buildRegion(FunctionModel model, Region region) {
         ProgramNode firstEntry = null;
         List<PendingExit> pendingExits = new ArrayList<>();
+        List<ProgramNode> pendingBreakExits = new ArrayList<>();
+        boolean flowContinues = true;
 
         for (String nodeId : region.nodeIds()) {
             ProgramNode node = model.findByCpgNodeId(nodeId).orElse(null);
@@ -40,6 +42,10 @@ public final class CfgBuilder {
                 continue;
             }
 
+            if (!flowContinues) {
+                continue;
+            }
+
             if (firstEntry == null) {
                 firstEntry = fragment.entry();
             }
@@ -49,15 +55,21 @@ public final class CfgBuilder {
             }
 
             pendingExits = new ArrayList<>(fragment.pendingExits());
+            pendingBreakExits.addAll(fragment.pendingBreakExits());
+            flowContinues = !pendingExits.isEmpty();
         }
 
-        return new Fragment(firstEntry, pendingExits);
+        return new Fragment(firstEntry, pendingExits, pendingBreakExits);
     }
 
     private Fragment buildNode(FunctionModel model, ProgramNode node) {
-        if (node.kind() == NodeKind.TRANSFER) {
+        if (isReturnTransfer(node)) {
             connect(node, model.exit(), CfgEdgeKind.TRANSFER);
-            return new Fragment(node, List.of());
+            return new Fragment(node, List.of(), List.of());
+        }
+
+        if (isBreakTransfer(node)) {
+            return new Fragment(node, List.of(), List.of(node));
         }
 
         IfStructure ifStructure = model.ifStructures().get(node.cpgNodeId());
@@ -75,17 +87,19 @@ public final class CfgBuilder {
             return buildLoop(model, node, loopStructure);
         }
 
-        return new Fragment(node, List.of(new PendingExit(node, CfgEdgeKind.NEXT)));
+        return new Fragment(node, List.of(new PendingExit(node, CfgEdgeKind.NEXT)), List.of());
     }
 
     private Fragment buildIf(FunctionModel model, ProgramNode owner, IfStructure structure) {
         Fragment thenFragment = buildRegion(model, structure.thenRegion());
         Fragment elseFragment = buildRegion(model, structure.elseRegion());
         List<PendingExit> pendingExits = new ArrayList<>();
+        List<ProgramNode> pendingBreakExits = new ArrayList<>();
 
         if (thenFragment.entry() != null) {
             connect(owner, thenFragment.entry(), CfgEdgeKind.TRUE_BRANCH);
             pendingExits.addAll(thenFragment.pendingExits());
+            pendingBreakExits.addAll(thenFragment.pendingBreakExits());
         } else {
             pendingExits.add(new PendingExit(owner, CfgEdgeKind.TRUE_BRANCH));
         }
@@ -93,11 +107,12 @@ public final class CfgBuilder {
         if (elseFragment.entry() != null) {
             connect(owner, elseFragment.entry(), CfgEdgeKind.FALSE_BRANCH);
             pendingExits.addAll(elseFragment.pendingExits());
+            pendingBreakExits.addAll(elseFragment.pendingBreakExits());
         } else {
             pendingExits.add(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
         }
 
-        return new Fragment(owner, pendingExits);
+        return new Fragment(owner, pendingExits, pendingBreakExits);
     }
 
     private Fragment buildSwitch(FunctionModel model, ProgramNode owner, SwitchStructure structure) {
@@ -110,6 +125,7 @@ public final class CfgBuilder {
             if (armFragment.entry() != null) {
                 connect(owner, armFragment.entry(), edgeKind);
                 pendingExits.addAll(armFragment.pendingExits());
+                pendingExits.addAll(toNextPendingExits(armFragment.pendingBreakExits()));
             } else {
                 pendingExits.add(new PendingExit(owner, edgeKind));
             }
@@ -119,13 +135,14 @@ public final class CfgBuilder {
             pendingExits.add(new PendingExit(owner, CfgEdgeKind.NEXT));
         }
 
-        return new Fragment(owner, pendingExits);
+        return new Fragment(owner, pendingExits, List.of());
     }
 
     private Fragment buildLoop(FunctionModel model, ProgramNode owner, LoopStructure structure) {
         Fragment initializerFragment = buildRegion(model, structure.initializerRegion());
         Fragment bodyFragment = buildRegion(model, structure.bodyRegion());
         Fragment iterationFragment = buildRegion(model, structure.iterationRegion());
+        List<PendingExit> pendingExits = new ArrayList<>();
 
         if (structure.conditionAfterBody()) {
             return buildPostConditionLoop(model, owner, initializerFragment, bodyFragment, iterationFragment);
@@ -136,6 +153,7 @@ public final class CfgBuilder {
             entry = initializerFragment.entry();
             connectPending(initializerFragment.pendingExits(), owner);
         }
+        pendingExits.addAll(toNextPendingExits(initializerFragment.pendingBreakExits()));
 
         ProgramNode trueTarget = firstNonNull(bodyFragment.entry(), iterationFragment.entry(), owner);
         connect(owner, trueTarget, CfgEdgeKind.TRUE_BRANCH);
@@ -147,12 +165,14 @@ public final class CfgBuilder {
             } else {
                 connectPending(bodyFragment.pendingExits(), owner, CfgEdgeKind.LOOP_BACK);
             }
+            pendingExits.addAll(toNextPendingExits(bodyFragment.pendingBreakExits()));
         } else if (iterationFragment.entry() != null) {
             connectPending(iterationFragment.pendingExits(), owner, CfgEdgeKind.LOOP_BACK);
         }
 
-        List<PendingExit> pendingExits = List.of(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
-        return new Fragment(entry, pendingExits);
+        pendingExits.addAll(toNextPendingExits(iterationFragment.pendingBreakExits()));
+        pendingExits.add(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
+        return new Fragment(entry, pendingExits, List.of());
     }
 
     private Fragment buildPostConditionLoop(
@@ -164,6 +184,7 @@ public final class CfgBuilder {
     ) {
         ProgramNode entry = owner;
         ProgramNode bodyEntry = firstNonNull(bodyFragment.entry(), iterationFragment.entry(), owner);
+        List<PendingExit> pendingExits = new ArrayList<>();
 
         if (initializerFragment.entry() != null) {
             entry = initializerFragment.entry();
@@ -171,6 +192,7 @@ public final class CfgBuilder {
         } else {
             entry = bodyEntry;
         }
+        pendingExits.addAll(toNextPendingExits(initializerFragment.pendingBreakExits()));
 
         if (bodyFragment.entry() != null) {
             if (iterationFragment.entry() != null) {
@@ -179,13 +201,15 @@ public final class CfgBuilder {
             } else {
                 connectPending(bodyFragment.pendingExits(), owner);
             }
+            pendingExits.addAll(toNextPendingExits(bodyFragment.pendingBreakExits()));
         } else if (iterationFragment.entry() != null) {
             connectPending(iterationFragment.pendingExits(), owner);
         }
 
+        pendingExits.addAll(toNextPendingExits(iterationFragment.pendingBreakExits()));
         connect(owner, bodyEntry, CfgEdgeKind.TRUE_BRANCH);
-        List<PendingExit> pendingExits = List.of(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
-        return new Fragment(entry, pendingExits);
+        pendingExits.add(new PendingExit(owner, CfgEdgeKind.FALSE_BRANCH));
+        return new Fragment(entry, pendingExits, List.of());
     }
 
     private ProgramNode firstNonNull(ProgramNode first, ProgramNode second, ProgramNode fallback) {
@@ -214,7 +238,24 @@ public final class CfgBuilder {
         to.addIncomingEdge(edge);
     }
 
-    private record Fragment(ProgramNode entry, List<PendingExit> pendingExits) {
+    private List<PendingExit> toNextPendingExits(List<ProgramNode> breakNodes) {
+        List<PendingExit> pendingExits = new ArrayList<>();
+        for (ProgramNode breakNode : breakNodes) {
+            pendingExits.add(new PendingExit(breakNode, CfgEdgeKind.TRANSFER));
+        }
+        return pendingExits;
+    }
+
+    private boolean isReturnTransfer(ProgramNode node) {
+        return node.kind() == NodeKind.TRANSFER
+                && node.defs().stream().anyMatch(entity -> entity.kind() == analysismodel.EntityKind.RETURN_SLOT);
+    }
+
+    private boolean isBreakTransfer(ProgramNode node) {
+        return node.kind() == NodeKind.TRANSFER && !isReturnTransfer(node);
+    }
+
+    private record Fragment(ProgramNode entry, List<PendingExit> pendingExits, List<ProgramNode> pendingBreakExits) {
     }
 
     private record PendingExit(ProgramNode from, CfgEdgeKind kind) {

@@ -339,7 +339,7 @@ public final class FunctionModelBuilder {
             String code,
             Integer startLine
     ) {
-        return new ProgramNode(nodeId, NodeKind.ACTION, code, startLine, Set.of(), Set.of());
+        return new ProgramNode(nodeId, NodeKind.TRANSFER, code, startLine, Set.of(), Set.of());
     }
 
     private ProgramNode buildReturnNode(

@@ -116,7 +116,9 @@ public final class AnalysisService {
         List<String> codes = new ArrayList<>();
         for (String nodeId : result.significantNodeIds()) {
             ProgramNode modelNode = model.findByCpgNodeId(nodeId).orElse(null);
-            if (modelNode != null && modelNode.kind() == NodeKind.TRANSFER) {
+            if (modelNode != null
+                    && modelNode.kind() == NodeKind.TRANSFER
+                    && modelNode.defs().stream().anyMatch(entity -> entity.kind() == analysismodel.EntityKind.RETURN_SLOT)) {
                 continue;
             }
 
