@@ -4,8 +4,6 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -137,6 +135,8 @@ public final class AnalysisTestRunner {
 
         AnalysisService analysisService = new AnalysisService();
         List<String> actualLines = analysisService.collectMarkedCodes();
+        AlgoTreeDebugService algoTreeDebugService = new AlgoTreeDebugService();
+        List<String> algoTreeLines = algoTreeDebugService.collectDebugLines();
 
         LinkedHashSet<String> normalizedExpected = normalizeToSet(expectedLines);
         LinkedHashSet<String> normalizedActual = normalizeToSet(actualLines);
@@ -153,6 +153,7 @@ public final class AnalysisTestRunner {
                 testCase.number(),
                 testCase.name(),
                 sourceCode,
+                algoTreeLines,
                 expectedLines,
                 actualLines,
                 missing,
@@ -186,6 +187,10 @@ public final class AnalysisTestRunner {
 
                 writer.println("Code:");
                 writer.println(result.sourceCode().stripTrailing());
+                writer.println();
+
+                writer.println("AlgoTree:");
+                writeLines(writer, result.algoTreeLines());
                 writer.println();
 
                 writer.println("Expected:");
@@ -252,6 +257,7 @@ public final class AnalysisTestRunner {
             int number,
             String name,
             String sourceCode,
+            List<String> algoTreeLines,
             List<String> expectedLines,
             List<String> actualLines,
             Set<String> missing,
