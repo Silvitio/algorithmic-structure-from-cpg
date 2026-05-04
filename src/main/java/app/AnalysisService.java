@@ -25,10 +25,10 @@ import java.util.List;
 import java.util.Set;
 
 public final class AnalysisService {
-    public static final String URI = "bolt://localhost:17687";
-    public static final String USER = "neo4j";
-    public static final String PASSWORD = "strongPasswordHere";
-    public static final String DATABASE = "neo4j";
+    public static final String URI = RuntimeSettings.NEO4J_URI;
+    public static final String USER = RuntimeSettings.NEO4J_USER;
+    public static final String PASSWORD = RuntimeSettings.NEO4J_PASSWORD;
+    public static final String DATABASE = RuntimeSettings.NEO4J_DATABASE;
 
     private static final String CLEAR_INFLUENCE_QUERY = """
             MATCH (n:INFLUENCES_RETURN)

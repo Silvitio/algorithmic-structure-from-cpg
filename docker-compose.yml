@@ -1,0 +1,18 @@
+services:
+  neo4j:
+    image: neo4j:5.26.14
+    container_name: neo4j-apoc
+    ports:
+      - "7474:7474"
+      - "17687:7687"
+    volumes:
+      - C:\Users\Silvitio\Documents\University\Diplom\neo4j\data:/data
+      - C:\Users\Silvitio\Documents\University\Diplom\neo4j\logs:/logs
+      - C:\Users\Silvitio\Documents\University\Diplom\neo4j\plugins:/plugins
+      - C:\Users\Silvitio\Documents\University\Diplom\neo4j\conf:/conf
+      - C:\Users\Silvitio\Documents\University\Diplom\neo4j\import:/import
+    environment:
+      - NEO4J_AUTH=neo4j/strongPasswordHere
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+    restart: unless-stopped

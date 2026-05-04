@@ -1,58 +1,59 @@
 package app;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.Charset;
+import de.fraunhofer.aisec.cpg.ConfigurationException;
+import de.fraunhofer.aisec.cpg.TranslationConfiguration;
+import de.fraunhofer.aisec.cpg.TranslationManager;
+import de.fraunhofer.aisec.cpg.TranslationResult;
+import de.fraunhofer.aisec.cpg.persistence.Neo4JKt;
+import org.neo4j.driver.AuthTokens;
+import org.neo4j.driver.Driver;
+import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Session;
+import org.neo4j.driver.SessionConfig;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
-import java.util.stream.Collectors;
+import java.util.concurrent.ExecutionException;
 
 public final class CpgLoaderService {
-    private static final Path CPG_NEO4J_BAT = Path.of(
-            "..", "..", "cpg-10.8.2", "cpg-neo4j", "build", "install", "cpg-neo4j", "bin", "cpg-neo4j.bat"
-    );
-
     public void load(Path sourcePath) throws Exception {
         Path normalizedSourcePath = sourcePath.toAbsolutePath().normalize();
         if (!Files.isRegularFile(normalizedSourcePath)) {
             throw new IllegalArgumentException("Source file was not found: " + normalizedSourcePath);
         }
 
-        Path loaderPath = CPG_NEO4J_BAT.toAbsolutePath().normalize();
-        if (!Files.isRegularFile(loaderPath)) {
-            throw new IllegalStateException("cpg-neo4j.bat was not found: " + loaderPath);
+        TranslationResult translationResult = analyze(normalizedSourcePath);
+
+        try (Driver driver = GraphDatabase.driver(
+                RuntimeSettings.NEO4J_URI,
+                AuthTokens.basic(RuntimeSettings.NEO4J_USER, RuntimeSettings.NEO4J_PASSWORD));
+             Session session = driver.session(SessionConfig.forDatabase(RuntimeSettings.NEO4J_DATABASE))) {
+            if (RuntimeSettings.CPG_PURGE_DATABASE) {
+                session.run("MATCH (n) DETACH DELETE n").consume();
+            }
+
+            Neo4JKt.persist(session, translationResult);
+        }
+    }
+
+    private TranslationResult analyze(Path sourcePath)
+            throws ExecutionException, InterruptedException, ConfigurationException, java.io.IOException {
+        TranslationConfiguration.Builder configurationBuilder = new TranslationConfiguration.Builder()
+                .defaultPasses()
+                .registerLanguage("de.fraunhofer.aisec.cpg.frontends.cxx.CLanguage")
+                .sourceLocations(sourcePath.toFile())
+                .topLevel(RuntimeSettings.resolveTopLevel(sourcePath).toFile())
+                .loadIncludes(RuntimeSettings.CPG_LOAD_INCLUDES)
+                .failOnError(false);
+
+        for (Path includePath : RuntimeSettings.readIncludePaths()) {
+            configurationBuilder.includePath(includePath);
         }
 
-        List<String> command = List.of(
-                "cmd.exe",
-                "/c",
-                loaderPath.toString(),
-                "--host=localhost",
-                "--port=17687",
-                "--user=" + AnalysisService.USER,
-                "--password=" + AnalysisService.PASSWORD,
-                normalizedSourcePath.toString()
-        );
-
-        ProcessBuilder processBuilder = new ProcessBuilder(command);
-        processBuilder.directory(Path.of("").toAbsolutePath().toFile());
-        processBuilder.redirectErrorStream(true);
-
-        Process process = processBuilder.start();
-        String output;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), Charset.defaultCharset()))
-        ) {
-            output = reader.lines().collect(Collectors.joining(System.lineSeparator()));
-        }
-
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new IllegalStateException(
-                    "Loading code into Neo4j failed with exit code "
-                            + exitCode + System.lineSeparator() + output
-            );
-        }
+        return TranslationManager.builder()
+                .config(configurationBuilder.build())
+                .build()
+                .analyze()
+                .get();
     }
 }
