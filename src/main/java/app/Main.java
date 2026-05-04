@@ -1,7 +1,6 @@
 package app;
 
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Scanner;
 
 public class Main {
@@ -10,6 +9,8 @@ public class Main {
     private static final String ALGO_TREE_DEBUG_FLAG = "--algo-tree-debug";
 
     public static void main(String[] args) throws Exception {
+        LoggingConfigurator.configure();
+
         if (isDefsUsesDebugMode(args)) {
             Path sourcePath = resolveDebugSourcePath(args);
             CpgLoaderService cpgLoaderService = new CpgLoaderService();
@@ -53,9 +54,11 @@ public class Main {
         cpgLoaderService.load(sourcePath);
 
         AnalysisService analysisService = new AnalysisService();
-        List<String> markedCodes = analysisService.collectMarkedCodes();
-        for (String code : markedCodes) {
-            System.out.println(code);
+        analysisService.collectMarkedCodes();
+
+        AlgoTreeDebugService algoTreeDebugService = new AlgoTreeDebugService();
+        for (String line : algoTreeDebugService.collectDebugLines()) {
+            System.out.println(line);
         }
     }
 

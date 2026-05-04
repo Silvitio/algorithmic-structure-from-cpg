@@ -20,6 +20,7 @@ public final class AnalysisTestRunner {
     private static final String EXPECTED_FILE_NAME = "expected.txt";
 
     public static void main(String[] args) throws Exception {
+        LoggingConfigurator.configure();
         new AnalysisTestRunner().runInteractive();
     }
 

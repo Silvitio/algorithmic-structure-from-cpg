@@ -14,6 +14,7 @@ public final class ModelAnalysisReportRunner {
     private static final String SOURCE_FILE_NAME = "source.c";
 
     public static void main(String[] args) throws Exception {
+        LoggingConfigurator.configure();
         new ModelAnalysisReportRunner().runAll();
     }
 
