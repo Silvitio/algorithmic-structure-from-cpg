@@ -1,6 +1,8 @@
 package analysis;
 
 import analysismodel.BranchArm;
+import analysismodel.Entity;
+import analysismodel.EntityKind;
 import analysismodel.FunctionModel;
 import analysismodel.NodeKind;
 import analysismodel.ProgramNode;
@@ -9,6 +11,8 @@ import analysismodel.SwitchStructure;
 import org.neo4j.driver.TransactionContext;
 import org.neo4j.driver.Values;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -19,6 +23,24 @@ public final class DeadCodeAnalyzer {
             WHERE elementId(n) = nodeId
             SET n:DEAD_CODE
             """;
+
+    public Set<String> findDeadDefinitionNodeIds(FunctionModel model, Set<String> significantModelNodeIds) {
+        Set<String> deadDefinitionNodeIds = new LinkedHashSet<>();
+
+        for (ProgramNode node : model.nodes()) {
+            if (!significantModelNodeIds.contains(node.cpgNodeId())) {
+                continue;
+            }
+            if (!isDeadDefinitionCandidate(node)) {
+                continue;
+            }
+            if (definesOnlyDeadValues(node, significantModelNodeIds)) {
+                deadDefinitionNodeIds.add(node.cpgNodeId());
+            }
+        }
+
+        return deadDefinitionNodeIds;
+    }
 
     public void analyze(
             TransactionContext tx,
@@ -35,6 +57,53 @@ public final class DeadCodeAnalyzer {
         }
 
         tx.run(MARK_DEAD_CODE_BY_IDS_QUERY, Values.parameters("nodeIds", deadNodeIds)).consume();
+    }
+
+    private boolean definesOnlyDeadValues(ProgramNode defNode, Set<String> significantModelNodeIds) {
+        Set<Entity> relevantDefs = new LinkedHashSet<>();
+        for (Entity entity : defNode.defs()) {
+            if (entity.kind() != EntityKind.RETURN_SLOT && entity.kind() != EntityKind.IO_SINK) {
+                relevantDefs.add(entity);
+            }
+        }
+
+        if (relevantDefs.isEmpty()) {
+            return false;
+        }
+
+        for (Entity entity : relevantDefs) {
+            if (hasUsefulUsePath(defNode, entity, significantModelNodeIds)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean hasUsefulUsePath(ProgramNode defNode, Entity entity, Set<String> significantModelNodeIds) {
+        Deque<ProgramNode> worklist = new ArrayDeque<>();
+        Set<String> visitedNodeIds = new LinkedHashSet<>();
+
+        defNode.outgoing().forEach(edge -> worklist.addLast(edge.to()));
+
+        while (!worklist.isEmpty()) {
+            ProgramNode node = worklist.removeFirst();
+            if (!visitedNodeIds.add(node.cpgNodeId())) {
+                continue;
+            }
+
+            if (significantModelNodeIds.contains(node.cpgNodeId()) && node.uses().contains(entity)) {
+                return true;
+            }
+
+            if (node.defs().contains(entity)) {
+                continue;
+            }
+
+            node.outgoing().forEach(edge -> worklist.addLast(edge.to()));
+        }
+
+        return false;
     }
 
     private Set<String> collectDeadSemanticNodeIds(
@@ -87,6 +156,19 @@ public final class DeadCodeAnalyzer {
 
         candidates.removeIf(structuralNodeIds::contains);
         return candidates;
+    }
+
+    private boolean isDeadDefinitionCandidate(ProgramNode node) {
+        if (node.defs().isEmpty()) {
+            return false;
+        }
+
+        String code = node.code().stripLeading();
+        return switch (node.kind()) {
+            case ACTION -> !code.startsWith("scanf(");
+            case DECLARATION -> code.contains("=");
+            case ENTRY, EXIT, BRANCH, LOOP, TRANSFER, BLOCK, LABEL -> false;
+        };
     }
 
     private boolean isSemanticDeadCandidate(ProgramNode node) {

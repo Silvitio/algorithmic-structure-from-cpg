@@ -1,6 +1,5 @@
 a = 1
 b = 2
-res = 0
 a < b
 res = a + 10;
 res = b + 20;

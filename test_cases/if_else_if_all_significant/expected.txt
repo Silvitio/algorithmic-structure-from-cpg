@@ -3,7 +3,6 @@ y = 5
 a = 11
 b = 22
 c = 33
-result = 0
 x < 0
 y > 0
 result = a;

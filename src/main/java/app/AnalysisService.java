@@ -82,16 +82,25 @@ public final class AnalysisService {
 
             for (FunctionModel model : models) {
                 ModelAnalysisResult semanticResult = modelReturnInfluenceAnalyzer.analyzeDetailed(model);
-                Set<String> structuralNodeIds = modelStructuralSignificanceAnalyzer.analyze(
+                Set<String> deadDefinitionNodeIds = deadCodeAnalyzer.findDeadDefinitionNodeIds(
                         model,
                         semanticResult.significantModelNodeIds()
                 );
+                Set<String> effectiveSemanticNodeIds = subtract(semanticResult.significantNodeIds(), deadDefinitionNodeIds);
+                Set<String> effectiveSignificantModelNodeIds = subtract(
+                        semanticResult.significantModelNodeIds(),
+                        deadDefinitionNodeIds
+                );
+                Set<String> structuralNodeIds = modelStructuralSignificanceAnalyzer.analyze(
+                        model,
+                        effectiveSignificantModelNodeIds
+                );
 
-                markNodes(tx, semanticResult.significantNodeIds(), MARK_INFLUENCE_QUERY);
+                markNodes(tx, effectiveSemanticNodeIds, MARK_INFLUENCE_QUERY);
                 markNodes(tx, structuralNodeIds, MARK_STRUCTURAL_QUERY);
-                deadCodeAnalyzer.analyze(tx, model, semanticResult.significantNodeIds(), structuralNodeIds);
+                deadCodeAnalyzer.analyze(tx, model, effectiveSemanticNodeIds, structuralNodeIds);
 
-                collectedCodes.addAll(resolveMarkedCodes(tx, model, semanticResult));
+                collectedCodes.addAll(resolveMarkedCodes(tx, model, effectiveSemanticNodeIds));
             }
 
             algoGraphBuilder.rebuild(tx);
@@ -111,10 +120,10 @@ public final class AnalysisService {
     private List<String> resolveMarkedCodes(
             TransactionContext tx,
             FunctionModel model,
-            ModelAnalysisResult result
+            Set<String> significantNodeIds
     ) {
         List<String> codes = new ArrayList<>();
-        for (String nodeId : result.significantNodeIds()) {
+        for (String nodeId : significantNodeIds) {
             ProgramNode modelNode = model.findByCpgNodeId(nodeId).orElse(null);
             if (modelNode != null
                     && modelNode.kind() == NodeKind.TRANSFER
@@ -129,6 +138,12 @@ public final class AnalysisService {
         }
 
         return codes;
+    }
+
+    private Set<String> subtract(Set<String> source, Set<String> excluded) {
+        Set<String> result = new LinkedHashSet<>(source);
+        result.removeAll(excluded);
+        return result;
     }
 
     private String resolveNodeText(TransactionContext tx, String nodeId) {
