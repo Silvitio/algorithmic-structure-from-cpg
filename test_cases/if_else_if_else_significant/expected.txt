@@ -1,0 +1,7 @@
+x = 1
+y = 5
+z = 3
+result = 0
+x < 0
+y > 0
+result = z + x;
