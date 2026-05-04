@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 
 public final class AnalysisTestRunner {
     private static final Path TEST_CASES_ROOT = Path.of("test_cases");
-    private static final Path REPORT_PATH = Path.of("docs", "analysis_test_runner_report.txt");
+    private static final Path REPORT_PATH = Path.of("tmp_docs", "analysis_test_runner_report.txt");
     private static final String SOURCE_FILE_NAME = "source.c";
     private static final String EXPECTED_FILE_NAME = "expected.txt";
 

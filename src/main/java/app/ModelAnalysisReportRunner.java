@@ -10,7 +10,7 @@ import java.util.List;
 
 public final class ModelAnalysisReportRunner {
     private static final Path TEST_CASES_ROOT = Path.of("test_cases");
-    private static final Path REPORT_PATH = Path.of("docs", "model_analysis_full_report.txt");
+    private static final Path REPORT_PATH = Path.of("tmp_docs", "model_analysis_full_report.txt");
     private static final String SOURCE_FILE_NAME = "source.c";
 
     public static void main(String[] args) throws Exception {
