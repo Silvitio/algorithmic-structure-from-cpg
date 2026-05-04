@@ -7,5 +7,5 @@ docker compose up -d
 
 ## 2. Выбрать файл для анализа и запустить программу:
 ```powershell
-.\gradlew.bat run --args="path\to_file.c"
+.\gradlew.bat run --args="code_examples\main_example.c"
 ```
